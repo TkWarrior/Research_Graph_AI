@@ -1,0 +1,34 @@
+# Docker Compose — Neo4j + PostgreSQL for local development
+
+services:
+  neo4j:
+    image: neo4j:5-community
+    container_name: research_neo4j
+    ports:
+      - "7474:7474"   # Neo4j Browser UI
+      - "7687:7687"   # Bolt protocol
+    environment:
+      NEO4J_AUTH: neo4j/password123
+      NEO4J_PLUGINS: '["apoc"]'
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: research_postgres
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: research_system
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password123
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
+  pg_data:

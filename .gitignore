@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# Environment
+.env
+*.env.local
+
+# Backend
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/chroma_data/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Docker
+docker-compose.override.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
