@@ -19,16 +19,40 @@ router = APIRouter()
 ALLOWED_EXTENSIONS = {"pdf", "docx"}
 
 
+@router.get("/documents")
+def list_documents(db: Session = Depends(get_db)):
+    """List all uploaded documents (for the document selector)."""
+    docs = db.query(Document).order_by(Document.created_at.desc()).all()
+    return [
+        {
+            "id": str(doc.id),
+            "original_filename": doc.original_filename,
+            "file_type": doc.file_type,
+            "status": doc.status,
+            "chunk_count": doc.chunk_count,
+            "entity_count": doc.entity_count,
+            "created_at": doc.created_at.isoformat() if doc.created_at else None,
+        }
+        for doc in docs
+    ]
+
+
 @router.post("/", response_model=DocumentUploadResponse)
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    graph_mode: str = "cooccurrence",
     db: Session = Depends(get_db)
 ):
     """
     Upload a document (PDF or DOCX) for processing.
     The file is saved locally, and a database record is created.
     Processing happens asynchronously.
+    
+    graph_mode options:
+      - "cooccurrence" (default): InfraNodus-style co-occurrence graph (fast, no LLM)
+      - "llm": LLM-based entity/relationship extraction (rich, slower)
+      - "both": Run both modes in parallel
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
@@ -84,26 +108,31 @@ async def upload_document(
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
     # Trigger LangGraph document processing pipeline in the background
-    background_tasks.add_task(process_document_pipeline, db_doc.id, file_path, ext)
+    background_tasks.add_task(
+        process_document_pipeline, db_doc.id, file_path, ext, graph_mode
+    )
 
     return DocumentUploadResponse(
         message="Document uploaded successfully and queued for processing.",
         document=db_doc
     )
 
-async def process_document_pipeline(document_id: str, file_path: str, file_type: str):
+async def process_document_pipeline(
+    document_id: str, file_path: str, file_type: str, graph_mode: str = "cooccurrence"
+):
     """Background task to run the full document ingestion LangGraph workflow."""
     from app.agents.workflows.document_workflow import build_document_workflow
     from app.agents.state import ResearchState
     from app.database import SessionLocal
     
-    app = build_document_workflow()
+    app = build_document_workflow(graph_mode=graph_mode)
     db = SessionLocal()
     
     initial_state = ResearchState(
         document_id=str(document_id),
         file_path=file_path,
         file_type=file_type,
+        graph_mode=graph_mode,
         errors=[]
     )
     

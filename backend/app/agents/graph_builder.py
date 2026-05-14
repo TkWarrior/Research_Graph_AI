@@ -1,5 +1,6 @@
 """
 Agent for storing extracted entities and relationships into Neo4j and saving snapshots.
+Supports both LLM-extracted and co-occurrence graph data.
 """
 
 from app.agents.state import ResearchState
@@ -8,32 +9,58 @@ from app.database import SessionLocal
 from app.models.document import GraphSnapshot
 
 def graph_builder_node(state: ResearchState) -> dict:
-    """Stores entities and relationships into Neo4j and creates a snapshot in Postgres."""
+    """
+    Stores entities, relationships, AND/OR co-occurrence data into Neo4j.
+    Creates a snapshot in Postgres for versioning.
+    """
     entities = state.get("entities", [])
     relationships = state.get("relationships", [])
+    cooccurrence_nodes = state.get("cooccurrence_nodes", [])
+    cooccurrence_edges = state.get("cooccurrence_edges", [])
     document_id = state.get("document_id")
 
     if not document_id:
         return {"errors": ["Missing document_id in graph_builder_node."]}
 
-    if not entities and not relationships:
+    has_llm_data = bool(entities or relationships)
+    has_cooccurrence_data = bool(cooccurrence_nodes or cooccurrence_edges)
+
+    if not has_llm_data and not has_cooccurrence_data:
         return {"current_step": "graph_building_skipped"}
 
     graph_service = GraphService()
     db = SessionLocal()
     
     try:
-        # 1. Write to Neo4j
-        graph_service.create_entities(entities)
-        graph_service.create_relationships(relationships)
+        # 1. Write LLM-extracted data to Neo4j (if present)
+        if has_llm_data:
+            graph_service.create_entities(entities, document_id=document_id)
+            graph_service.create_relationships(relationships, document_id=document_id)
+
+        # 2. Write co-occurrence data to Neo4j (if present)
+        if has_cooccurrence_data:
+            graph_service.create_cooccurrence_nodes(cooccurrence_nodes, document_id=document_id)
+            graph_service.create_cooccurrence_edges(cooccurrence_edges, document_id=document_id)
         
-        # 2. Save snapshot to PostgreSQL
+        # 3. Save snapshot to PostgreSQL
+        # Merge both data sources into the snapshot
+        snapshot_nodes = []
+        snapshot_edges = []
+
+        if has_llm_data:
+            snapshot_nodes.extend([e.model_dump() for e in entities])
+            snapshot_edges.extend([r.model_dump() for r in relationships])
+
+        if has_cooccurrence_data:
+            snapshot_nodes.extend(cooccurrence_nodes)
+            snapshot_edges.extend(cooccurrence_edges)
+
         snapshot = GraphSnapshot(
             document_id=document_id,
-            nodes=[e.model_dump() for e in entities],
-            edges=[r.model_dump() for r in relationships],
-            node_count=len(entities),
-            edge_count=len(relationships)
+            nodes=snapshot_nodes,
+            edges=snapshot_edges,
+            node_count=len(snapshot_nodes),
+            edge_count=len(snapshot_edges),
         )
         db.add(snapshot)
         db.commit()
@@ -45,3 +72,4 @@ def graph_builder_node(state: ResearchState) -> dict:
     finally:
         graph_service.close()
         db.close()
+

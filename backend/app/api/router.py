@@ -14,6 +14,8 @@ from app.api.ask import router as ask_router
 from app.api.graph import router as graph_router
 from app.api.insights import router as insights_router
 from app.api.sessions import router as sessions_router
+from app.api.analytics import router as analytics_router
+from app.api.text_input import router as text_input_router
 
 api_router.include_router(upload_router, prefix="/upload", tags=["Upload"])
 api_router.include_router(query_router, prefix="/query", tags=["Query"])
@@ -21,6 +23,8 @@ api_router.include_router(ask_router, prefix="/ask", tags=["Q&A"])
 api_router.include_router(graph_router, prefix="/graph", tags=["Graph"])
 api_router.include_router(insights_router, prefix="/insights", tags=["Insights"])
 api_router.include_router(sessions_router, prefix="/sessions", tags=["Sessions"])
+api_router.include_router(analytics_router, prefix="/analytics", tags=["Analytics"])
+api_router.include_router(text_input_router, prefix="/text-input", tags=["Text Input"])
 
 
 @api_router.get("/")
@@ -36,5 +40,7 @@ async def api_root():
             "/api/graph",
             "/api/insights",
             "/api/sessions",
+            "/api/analytics",
+            "/api/text-input",
         ],
     }

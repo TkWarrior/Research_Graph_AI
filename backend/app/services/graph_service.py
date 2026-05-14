@@ -1,8 +1,12 @@
 """
 Service for managing the Knowledge Graph using Neo4j.
+
+Supports document-scoped graphs: each node and edge is tagged with a
+document_id so graphs from different documents can coexist in the same
+Neo4j database and be queried independently.
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from neo4j import GraphDatabase
 from loguru import logger
 
@@ -27,113 +31,178 @@ class GraphService:
         self.driver.close()
 
     def _create_constraints(self):
-        """Create uniqueness constraints for entities to prevent duplicates."""
-        query = "CREATE CONSTRAINT entity_name IF NOT EXISTS FOR (e:Entity) REQUIRE e.name IS UNIQUE"
+        """Create indexes for efficient document-scoped queries."""
+        queries = [
+            # Composite index on name + document_id for fast lookups
+            "CREATE INDEX entity_doc_idx IF NOT EXISTS FOR (e:Entity) ON (e.name, e.document_id)",
+            # Index on document_id alone for full-document queries
+            "CREATE INDEX entity_docid_idx IF NOT EXISTS FOR (e:Entity) ON (e.document_id)",
+        ]
         try:
             with self.driver.session() as session:
-                session.run(query)
+                for q in queries:
+                    session.run(q)
         except Exception as e:
-            # Constraints might already exist or require enterprise edition for some features
-            print(f"Note on constraint creation: {e}")
+            print(f"Note on index creation: {e}")
 
-    def create_entities(self, entities: List[Entity]) -> None:
-        """Create or merge multiple entities into the graph."""
+    # ─────────────────────────────────────────────────────────────────
+    # LLM-extracted entity/relationship storage
+    # ─────────────────────────────────────────────────────────────────
+
+    def create_entities(self, entities: List[Entity], document_id: str = None) -> None:
+        """Create or merge multiple entities into the graph, scoped by document_id."""
         if not entities:
             return
 
         query = """
         UNWIND $entities AS e
-        MERGE (n:Entity {name: e.name})
+        MERGE (n:Entity {name: e.name, document_id: e.document_id})
         SET n.type = e.type, n.description = e.description
         """
         
         entities_data = [
-            {"name": ent.name, "type": ent.type, "description": ent.description}
+            {
+                "name": ent.name,
+                "type": ent.type,
+                "description": ent.description,
+                "document_id": document_id or "global",
+            }
             for ent in entities
         ]
 
         with self.driver.session() as session:
             session.run(query, entities=entities_data)
 
-    def create_relationships(self, relationships: List[Relationship]) -> None:
-        """Create relationships between existing entities."""
+    def create_relationships(self, relationships: List[Relationship], document_id: str = None) -> None:
+        """Create relationships between entities within the same document scope."""
         if not relationships:
             return
 
-        # Cypher to safely merge relationships only if both source and target exist
+        doc_id = document_id or "global"
+
         query = """
         UNWIND $rels AS r
-        MATCH (source:Entity {name: r.source})
-        MATCH (target:Entity {name: r.target})
+        MATCH (source:Entity {name: r.source, document_id: $doc_id})
+        MATCH (target:Entity {name: r.target, document_id: $doc_id})
         MERGE (source)-[rel:RELATED_TO {type: r.type}]->(target)
-        SET rel.description = r.description
+        SET rel.description = r.description, rel.document_id = $doc_id
         """
         
         rels_data = [
             {
                 "source": r.source,
                 "target": r.target,
-                "type": r.type.upper().replace(" ", "_"), # Ensure valid neo4j type format
-                "description": r.description
+                "type": r.type.upper().replace(" ", "_"),
+                "description": r.description,
             }
             for r in relationships
         ]
 
         with self.driver.session() as session:
-            session.run(query, rels=rels_data)
+            session.run(query, rels=rels_data, doc_id=doc_id)
 
-    def query_subgraph(self, entity_name: str, depth: int = 1) -> Dict[str, Any]:
+    # ─────────────────────────────────────────────────────────────────
+    # Query methods (document-scoped)
+    # ─────────────────────────────────────────────────────────────────
+
+    def query_subgraph(self, entity_name: str, depth: int = 1, document_id: str = None) -> Dict[str, Any]:
         """Retrieve the neighborhood graph around a specific entity."""
-        # Note: Cypher does not support parameterization for path length bounds, 
-        # so we safely format the depth integer directly into the query string.
-        query = f"""
-        MATCH path = (e:Entity {{name: $name}})-[*1..{int(depth)}]-(connected)
-        RETURN path
-        """
+        if document_id:
+            query = f"""
+            MATCH path = (e:Entity {{name: $name, document_id: $doc_id}})-[*1..{int(depth)}]-(connected)
+            WHERE connected.document_id = $doc_id
+            RETURN path
+            """
+            params = {"name": entity_name, "doc_id": document_id}
+        else:
+            query = f"""
+            MATCH path = (e:Entity {{name: $name}})-[*1..{int(depth)}]-(connected)
+            RETURN path
+            """
+            params = {"name": entity_name}
+
         with self.driver.session() as session:
-            result = session.run(query, name=entity_name, depth=depth)
+            result = session.run(query, **params)
             return self._format_graph_result(result)
 
-    def search_entities(self, search_term: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def search_entities(self, search_term: str, limit: int = 10, document_id: str = None) -> List[Dict[str, Any]]:
         """Search for entities matching a term in their name or description."""
-        query = """
-        MATCH (e:Entity)
-        WHERE toLower(e.name) CONTAINS toLower($term) 
-           OR toLower(e.description) CONTAINS toLower($term)
-        RETURN e.name AS name, e.type AS type, e.description AS description
-        LIMIT $limit
-        """
+        if document_id:
+            query = """
+            MATCH (e:Entity {document_id: $doc_id})
+            WHERE toLower(e.name) CONTAINS toLower($term) 
+               OR toLower(e.description) CONTAINS toLower($term)
+            RETURN e.name AS name, e.type AS type, e.description AS description
+            LIMIT $limit
+            """
+            params = {"term": search_term, "limit": limit, "doc_id": document_id}
+        else:
+            query = """
+            MATCH (e:Entity)
+            WHERE toLower(e.name) CONTAINS toLower($term) 
+               OR toLower(e.description) CONTAINS toLower($term)
+            RETURN e.name AS name, e.type AS type, e.description AS description
+            LIMIT $limit
+            """
+            params = {"term": search_term, "limit": limit}
+
         with self.driver.session() as session:
-            result = session.run(query, term=search_term, limit=limit)
+            result = session.run(query, **params)
             return [record.data() for record in result]
 
-    def get_full_graph(self, limit: int = 500) -> Dict[str, Any]:
-        """Retrieve the entire graph (up to a node limit) for frontend visualization."""
-        query = """
-        MATCH (n:Entity)
-        OPTIONAL MATCH (n)-[r]->(m:Entity)
-        RETURN n, r, m
-        LIMIT $limit
+    def get_full_graph(self, limit: int = 500, document_id: str = None) -> Dict[str, Any]:
         """
+        Retrieve the graph for frontend visualization.
+        If document_id is provided, only return nodes/edges for that document.
+        Otherwise, return the entire graph.
+        """
+        if document_id:
+            query = """
+            MATCH (n:Entity {document_id: $doc_id})
+            OPTIONAL MATCH (n)-[r]-(m:Entity {document_id: $doc_id})
+            RETURN n, r, m
+            LIMIT $limit
+            """
+            params = {"limit": limit, "doc_id": document_id}
+        else:
+            query = """
+            MATCH (n:Entity)
+            OPTIONAL MATCH (n)-[r]-(m:Entity)
+            RETURN n, r, m
+            LIMIT $limit
+            """
+            params = {"limit": limit}
+
         with self.driver.session() as session:
-            result = session.run(query, limit=limit)
+            result = session.run(query, **params)
             return self._format_graph_result(result)
 
-    def get_graph_stats(self) -> Dict[str, Any]:
+    def get_graph_stats(self, document_id: str = None) -> Dict[str, Any]:
         """Get statistics about the knowledge graph."""
-        query_nodes = "MATCH (n:Entity) RETURN count(n) as node_count"
-        query_edges = "MATCH ()-[r]->() RETURN count(r) as edge_count"
-        query_top = """
-        MATCH (n:Entity)-[r]-() 
-        RETURN n.name as name, count(r) as degree 
-        ORDER BY degree DESC LIMIT 5
-        """
-        
+        if document_id:
+            query_nodes = "MATCH (n:Entity {document_id: $doc_id}) RETURN count(n) as node_count"
+            query_edges = "MATCH (a:Entity {document_id: $doc_id})-[r]-(b:Entity {document_id: $doc_id}) RETURN count(r) as edge_count"
+            query_top = """
+            MATCH (n:Entity {document_id: $doc_id})-[r]-() 
+            RETURN n.name as name, count(r) as degree 
+            ORDER BY degree DESC LIMIT 5
+            """
+            params = {"doc_id": document_id}
+        else:
+            query_nodes = "MATCH (n:Entity) RETURN count(n) as node_count"
+            query_edges = "MATCH ()-[r]->() RETURN count(r) as edge_count"
+            query_top = """
+            MATCH (n:Entity)-[r]-() 
+            RETURN n.name as name, count(r) as degree 
+            ORDER BY degree DESC LIMIT 5
+            """
+            params = {}
+
         stats = {}
         with self.driver.session() as session:
-            stats["node_count"] = session.run(query_nodes).single()["node_count"]
-            stats["edge_count"] = session.run(query_edges).single()["edge_count"]
-            stats["most_connected"] = [record.data() for record in session.run(query_top)]
+            stats["node_count"] = session.run(query_nodes, **params).single()["node_count"]
+            stats["edge_count"] = session.run(query_edges, **params).single()["edge_count"]
+            stats["most_connected"] = [record.data() for record in session.run(query_top, **params)]
             
         return stats
 
@@ -143,10 +212,78 @@ class GraphService:
             result = session.run(query, parameters or {})
             return [record.data() for record in result]
 
+    def delete_document_graph(self, document_id: str) -> Dict[str, int]:
+        """Delete all nodes and relationships for a specific document."""
+        query = """
+        MATCH (n:Entity {document_id: $doc_id})
+        DETACH DELETE n
+        RETURN count(n) as deleted_count
+        """
+        with self.driver.session() as session:
+            result = session.run(query, doc_id=document_id)
+            record = result.single()
+            count = record["deleted_count"] if record else 0
+            logger.info(f"Deleted {count} nodes for document {document_id}")
+            return {"deleted_nodes": count}
+
+    # ─────────────────────────────────────────────────────────────────
+    # Co-occurrence graph storage (InfraNodus-style)
+    # ─────────────────────────────────────────────────────────────────
+
+    def create_cooccurrence_nodes(self, nodes: List[Dict[str, Any]], document_id: str = None) -> None:
+        """
+        Create or merge co-occurrence word nodes into the graph.
+        Each node is scoped to a document_id.
+        """
+        if not nodes:
+            return
+
+        doc_id = document_id or "global"
+
+        query = """
+        UNWIND $nodes AS n
+        MERGE (e:Entity {name: n.name, document_id: $doc_id})
+        SET e.frequency = COALESCE(e.frequency, 0) + n.frequency,
+            e.type = COALESCE(e.type, 'CONCEPT')
+        """
+
+        with self.driver.session() as session:
+            session.run(query, nodes=nodes, doc_id=doc_id)
+            logger.info(f"Merged {len(nodes)} co-occurrence nodes for doc {doc_id}")
+
+    def create_cooccurrence_edges(self, edges: List[Dict[str, Any]], document_id: str = None) -> None:
+        """
+        Create or merge co-occurrence edges with cumulative weights.
+        Edges are scoped to the same document_id.
+        """
+        if not edges:
+            return
+
+        doc_id = document_id or "global"
+
+        query = """
+        UNWIND $edges AS e
+        MATCH (source:Entity {name: e.source, document_id: $doc_id})
+        MATCH (target:Entity {name: e.target, document_id: $doc_id})
+        MERGE (source)-[r:CO_OCCURS]-(target)
+        SET r.weight = COALESCE(r.weight, 0) + e.weight,
+            r.type = 'CO_OCCURS',
+            r.document_id = $doc_id
+        """
+
+        with self.driver.session() as session:
+            session.run(query, edges=edges, doc_id=doc_id)
+            logger.info(f"Merged {len(edges)} co-occurrence edges for doc {doc_id}")
+
+    # ─────────────────────────────────────────────────────────────────
+    # Formatting helper
+    # ─────────────────────────────────────────────────────────────────
+
     def _format_graph_result(self, neo4j_result) -> Dict[str, Any]:
         """Helper to format Neo4j paths/nodes into standard node/edge lists for frontend."""
-        nodes = {}
-        edges = []
+        nodes = {}        # element_id -> node dict
+        raw_edges = []     # edges with element_id references
+        id_to_name = {}    # element_id -> node name (for resolving edges)
 
         for record in neo4j_result:
             for key in record.keys():
@@ -157,27 +294,59 @@ class GraphService:
                 # Check if it's a Path
                 if hasattr(item, "nodes") and hasattr(item, "relationships"):
                     for n in item.nodes:
-                        nodes[n.element_id] = {"id": n.element_id, "name": n.get("name"), "type": n.get("type"), "description": n.get("description")}
+                        name = n.get("name")
+                        id_to_name[n.element_id] = name
+                        nodes[n.element_id] = {
+                            "id": name,
+                            "name": name,
+                            "type": n.get("type"),
+                            "description": n.get("description"),
+                            "frequency": n.get("frequency"),
+                            "document_id": n.get("document_id"),
+                        }
                     for r in item.relationships:
-                        edges.append({
-                            "id": r.element_id,
-                            "source": r.start_node.element_id,
-                            "target": r.end_node.element_id,
+                        raw_edges.append({
+                            "source_eid": r.start_node.element_id,
+                            "target_eid": r.end_node.element_id,
                             "type": r.get("type", r.type),
-                            "description": r.get("description", "")
+                            "weight": r.get("weight", 1),
+                            "description": r.get("description", ""),
                         })
                 # Check if it's a Node
                 elif hasattr(item, "labels"):
-                    nodes[item.element_id] = {"id": item.element_id, "name": item.get("name"), "type": item.get("type"), "description": item.get("description")}
+                    name = item.get("name")
+                    id_to_name[item.element_id] = name
+                    nodes[item.element_id] = {
+                        "id": name,
+                        "name": name,
+                        "type": item.get("type"),
+                        "description": item.get("description"),
+                        "frequency": item.get("frequency"),
+                        "document_id": item.get("document_id"),
+                    }
                 # Check if it's a Relationship
                 elif hasattr(item, "type"):
-                    edges.append({
-                        "id": item.element_id,
-                        "source": item.start_node.element_id,
-                        "target": item.end_node.element_id,
+                    raw_edges.append({
+                        "source_eid": item.start_node.element_id,
+                        "target_eid": item.end_node.element_id,
                         "type": item.get("type", item.type),
-                        "description": item.get("description", "")
+                        "weight": item.get("weight", 1),
+                        "description": item.get("description", ""),
                     })
+
+        # Resolve edge element_ids to node names
+        edges = []
+        for e in raw_edges:
+            src_name = id_to_name.get(e["source_eid"])
+            tgt_name = id_to_name.get(e["target_eid"])
+            if src_name and tgt_name:
+                edges.append({
+                    "source": src_name,
+                    "target": tgt_name,
+                    "type": e["type"],
+                    "weight": e["weight"],
+                    "description": e["description"],
+                })
 
         # Deduplicate edges
         unique_edges = {f"{e['source']}-{e['target']}-{e['type']}": e for e in edges}
@@ -186,3 +355,4 @@ class GraphService:
             "nodes": list(nodes.values()),
             "edges": list(unique_edges.values())
         }
+
