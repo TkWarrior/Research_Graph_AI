@@ -1,5 +1,5 @@
 """
-Agent for building a co-occurrence graph from document chunks (InfraNodus-style).
+Agent for building a co-occurrence graph from document chunks 
 
 This replaces the LLM-based extraction as the *primary* graph construction
 method when graph_mode is "cooccurrence" or "both".

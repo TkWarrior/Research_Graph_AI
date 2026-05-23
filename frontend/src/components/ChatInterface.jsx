@@ -1,13 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, User, Bot, AlertTriangle, Layers } from 'lucide-react';
 import { api } from '../services/api';
+import { useWorkspace } from '../context/WorkspaceContext';
 
 const ChatInterface = ({ sessionId, onNewSessionCreated }) => {
+  const { activeWorkspace } = useWorkspace();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [currentSession, setCurrentSession] = useState(sessionId);
   const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    setCurrentSession(sessionId);
+  }, [sessionId]);
 
   useEffect(() => {
     if (sessionId) {
@@ -49,7 +55,7 @@ const ChatInterface = ({ sessionId, onNewSessionCreated }) => {
     setIsLoading(true);
 
     try {
-      const res = await api.askQuestion(query, null, currentSession);
+      const res = await api.askQuestion(query, activeWorkspace?.id, currentSession);
       
       // If a new session was created on the backend, update our state
       if (!currentSession && res.session_id) {

@@ -21,6 +21,7 @@ async def run_research_query(request: QueryRequest):
     try:
         initial_state = ResearchState(
             query=request.query,
+            workspace_id=str(request.workspace_id),   # ← scope to workspace
             errors=[]
         )
         

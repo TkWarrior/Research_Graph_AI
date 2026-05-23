@@ -11,13 +11,21 @@ from sqlalchemy.orm import relationship
 
 from app.database import Base
 
+# Forward-declare Workspace to avoid circular import issues at module load time.
+# The actual class is imported inside relationship() via string reference.
+
 
 class Document(Base):
-    """Represents an uploaded document (PDF/DOCX)."""
+    """Represents an uploaded document (PDF/DOCX) that belongs to a Workspace."""
 
     __tablename__ = "documents"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # ── Workspace FK ──────────────────────────────────────────────────
+    workspace_id = Column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False
+    )
+    # ── File Metadata ─────────────────────────────────────────────────
     filename = Column(String(500), nullable=False)
     original_filename = Column(String(500), nullable=False)
     file_type = Column(String(20), nullable=False)  # "pdf" or "docx"
@@ -38,29 +46,33 @@ class Document(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    # Relationships
+    # ── Relationships ─────────────────────────────────────────────────
+    workspace = relationship("Workspace", back_populates="documents")
     graph_snapshots = relationship(
         "GraphSnapshot", back_populates="document", cascade="all, delete-orphan"
     )
-    chat_sessions = relationship(
-        "ChatSession", back_populates="document", cascade="all, delete-orphan"
-    )
 
     def __repr__(self):
-        return f"<Document {self.original_filename} ({self.status})>"
+        return f"<Document {self.original_filename} (ws={self.workspace_id}, {self.status})>"
 
 
 class GraphSnapshot(Base):
     """
-    Serialized copy of a document's knowledge graph stored in PostgreSQL.
+    Serialized copy of a workspace's merged knowledge graph stored in PostgreSQL.
+    Captures the combined graph of ALL documents within a workspace.
     Enables versioning, fast reload, and portability independent of Neo4j.
     """
 
     __tablename__ = "graph_snapshots"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # ── Workspace FK (primary scope) ──────────────────────────────────
+    workspace_id = Column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False
+    )
+    # ── Per-document sub-reference (optional, for traceability) ───────
     document_id = Column(
-        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=True
     )
     version = Column(Integer, default=1)
     nodes = Column(JSON, nullable=False)  # [{name, type, description, ...}]
@@ -71,8 +83,12 @@ class GraphSnapshot(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
-    # Relationships
+    # ── Relationships ─────────────────────────────────────────────────
+    workspace = relationship("Workspace", back_populates="graph_snapshots")
     document = relationship("Document", back_populates="graph_snapshots")
 
     def __repr__(self):
-        return f"<GraphSnapshot doc={self.document_id} v{self.version} ({self.node_count} nodes, {self.edge_count} edges)>"
+        return (
+            f"<GraphSnapshot ws={self.workspace_id} v{self.version}"
+            f" ({self.node_count} nodes, {self.edge_count} edges)>"
+        )

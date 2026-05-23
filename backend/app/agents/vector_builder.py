@@ -1,14 +1,19 @@
 """
 Agent for embedding document chunks and storing them in ChromaDB.
+
+Passes workspace_id to EmbeddingService so every stored vector is tagged
+with both workspace_id and document_id for workspace-scoped retrieval.
 """
 
 from app.agents.state import ResearchState
 from app.services.embedding_service import EmbeddingService
 
+
 def vector_builder_node(state: ResearchState) -> dict:
-    """Embeds and stores document chunks in ChromaDB."""
+    """Embeds and stores document chunks in ChromaDB, tagged with workspace_id."""
     chunks = state.get("chunks", [])
     document_id = state.get("document_id")
+    workspace_id = state.get("workspace_id")  # injected from upload pipeline
 
     if not document_id:
         return {"errors": ["Missing document_id in vector_builder_node."]}
@@ -17,9 +22,13 @@ def vector_builder_node(state: ResearchState) -> dict:
         return {"current_step": "vector_building_skipped"}
 
     embedding_service = EmbeddingService()
-    
+
     try:
-        count = embedding_service.store_chunks(document_id, chunks)
+        count = embedding_service.store_chunks(
+            document_id=document_id,
+            chunks=chunks,
+            workspace_id=workspace_id,   # tags every vector with workspace scope
+        )
         return {
             "current_step": f"vector_building_complete_{count}_chunks"
         }

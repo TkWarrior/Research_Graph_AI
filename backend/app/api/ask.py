@@ -19,6 +19,7 @@ qa_app = build_qa_workflow()
 async def ask_question(request: AskRequest, db: Session = Depends(get_db)):
     """
     Ask a question and get an answer using Hybrid RAG (Vector + Graph retrieval).
+    Scoped to a workspace so retrieval spans all documents in that workspace.
     Automatically saves the conversation to a chat session.
     """
     try:
@@ -29,10 +30,10 @@ async def ask_question(request: AskRequest, db: Session = Depends(get_db)):
             if not chat_session:
                 raise HTTPException(status_code=404, detail="Session not found")
         else:
-            # Create a new session
+            # Create a new session scoped to the workspace
             chat_session = ChatSession(
                 title=request.question[:50] + "..." if len(request.question) > 50 else request.question,
-                document_id=request.document_id
+                workspace_id=request.workspace_id,   # ← workspace scope
             )
             db.add(chat_session)
             db.flush()
@@ -47,24 +48,23 @@ async def ask_question(request: AskRequest, db: Session = Depends(get_db)):
         db.add(user_msg)
         db.commit()
 
-        # 3. Execute LangGraph QA Workflow
+        # 3. Execute LangGraph QA Workflow — workspace_id scopes both vector + graph retrieval
         initial_state = ResearchState(
             query=request.question,
-            document_id=str(request.document_id) if request.document_id else None,
+            workspace_id=str(request.workspace_id),   # ← primary scope
             errors=[]
         )
-        
+
         final_state = await qa_app.ainvoke(initial_state)
 
         if final_state.get("errors"):
             raise Exception(" | ".join(final_state["errors"]))
 
-        # Extract results
         answer = final_state.get("answer", "I could not find an answer to your question.")
         vector_ctx = final_state.get("vector_context", [])
         graph_ctx = final_state.get("graph_context", [])
 
-        # 4. Save assistant response with context
+        # 4. Save assistant response with retrieval context
         assistant_msg = ChatMessage(
             session_id=session_id,
             role="assistant",
@@ -73,13 +73,13 @@ async def ask_question(request: AskRequest, db: Session = Depends(get_db)):
             graph_context=graph_ctx
         )
         db.add(assistant_msg)
-        
-        # Update session timestamp
-        chat_session.updated_at = assistant_msg.created_at
+        from datetime import datetime, timezone
+        chat_session.updated_at = datetime.now(timezone.utc)
         db.commit()
 
         return AskResponse(
             answer=answer,
+            workspace_id=request.workspace_id,
             session_id=session_id,
             sources=vector_ctx,
             graph_context=graph_ctx

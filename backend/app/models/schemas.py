@@ -4,9 +4,48 @@ Pydantic schemas for API request/response validation.
 
 from datetime import datetime
 from uuid import UUID
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Workspace Schemas
+# ══════════════════════════════════════════════════════════════════════
+
+
+class WorkspaceCreate(BaseModel):
+    """Request body to create a new workspace."""
+
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+
+
+class WorkspaceUpdate(BaseModel):
+    """Request body to rename or update a workspace."""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = None
+
+
+class WorkspaceOut(BaseModel):
+    """Response schema for a workspace (summary view)."""
+
+    id: UUID
+    name: str
+    description: Optional[str] = None
+    document_count: int = 0        # populated manually in the endpoint
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class WorkspaceListResponse(BaseModel):
+    """Response for listing all workspaces."""
+
+    workspaces: List[WorkspaceOut]
+    total: int
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -18,6 +57,7 @@ class DocumentOut(BaseModel):
     """Response schema for a document."""
 
     id: UUID
+    workspace_id: UUID          # which workspace this document belongs to
     filename: str
     original_filename: str
     file_type: str
@@ -58,8 +98,8 @@ class ChatMessageOut(BaseModel):
     id: UUID
     role: str
     content: str
-    sources: Optional[list[dict]] = None
-    graph_context: Optional[list[dict]] = None
+    sources: Optional[List[dict]] = None
+    graph_context: Optional[List[dict]] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -70,7 +110,7 @@ class ChatSessionOut(BaseModel):
 
     id: UUID
     title: Optional[str] = None
-    document_id: Optional[UUID] = None
+    workspace_id: UUID          # sessions are now workspace-scoped
     message_count: int = 0
     created_at: datetime
     updated_at: datetime
@@ -83,10 +123,10 @@ class ChatSessionDetail(BaseModel):
 
     id: UUID
     title: Optional[str] = None
-    document_id: Optional[UUID] = None
+    workspace_id: UUID
     created_at: datetime
     updated_at: datetime
-    messages: list[ChatMessageOut]
+    messages: List[ChatMessageOut]
 
     model_config = {"from_attributes": True}
 
@@ -94,7 +134,7 @@ class ChatSessionDetail(BaseModel):
 class ChatSessionListResponse(BaseModel):
     """Response for listing chat sessions."""
 
-    sessions: list[ChatSessionOut]
+    sessions: List[ChatSessionOut]
     total: int
 
 
@@ -102,7 +142,7 @@ class ChatSessionCreateRequest(BaseModel):
     """Request to create a new chat session."""
 
     title: Optional[str] = None
-    document_id: Optional[UUID] = None
+    workspace_id: UUID          # required — every session belongs to a workspace
 
 
 class ChatSessionRenameRequest(BaseModel):
@@ -120,17 +160,18 @@ class AskRequest(BaseModel):
     """Request to ask a question via Hybrid RAG."""
 
     question: str = Field(..., min_length=1)
-    session_id: Optional[UUID] = None
-    document_id: Optional[UUID] = None
+    workspace_id: UUID          # required — scopes vector + graph retrieval
+    session_id: Optional[UUID] = None   # if None, a new session is auto-created
 
 
 class AskResponse(BaseModel):
     """Response from the Hybrid RAG Q&A."""
 
     answer: str
+    workspace_id: UUID
     session_id: UUID
-    sources: list[dict] = []
-    graph_context: list[dict] = []
+    sources: List[dict] = []
+    graph_context: List[dict] = []
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -139,10 +180,11 @@ class AskResponse(BaseModel):
 
 
 class GraphSnapshotOut(BaseModel):
-    """Response schema for a graph snapshot."""
+    """Response schema for a graph snapshot (summary)."""
 
     id: UUID
-    document_id: UUID
+    workspace_id: UUID          # primary scope — merged graph of the whole workspace
+    document_id: Optional[UUID] = None  # nullable — which doc triggered this snapshot
     version: int
     node_count: int
     edge_count: int
@@ -152,13 +194,14 @@ class GraphSnapshotOut(BaseModel):
 
 
 class GraphSnapshotDetail(BaseModel):
-    """Response schema for a graph snapshot with full data."""
+    """Response schema for a graph snapshot with full node/edge data."""
 
     id: UUID
-    document_id: UUID
+    workspace_id: UUID
+    document_id: Optional[UUID] = None
     version: int
-    nodes: list[dict]
-    edges: list[dict]
+    nodes: List[dict]
+    edges: List[dict]
     node_count: int
     edge_count: int
     created_at: datetime
@@ -175,6 +218,7 @@ class QueryRequest(BaseModel):
     """Request for a research query."""
 
     query: str = Field(..., min_length=1)
+    workspace_id: UUID          # required — scopes document context for the research workflow
 
 
 class QueryResponse(BaseModel):

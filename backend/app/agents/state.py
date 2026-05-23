@@ -25,7 +25,13 @@ class ResearchState(TypedDict):
     
     # ── Core Inputs / Outputs ──
     query: Optional[str]                     # The user's query or question
-    document_id: Optional[str]               # ID of the document being processed or queried
+    workspace_id: Optional[str]              # ID of the workspace — scopes ALL retrieval,
+                                             # graph queries, vector filters, and insights.
+                                             # Set once at workflow entry; flows to every node.
+    document_id: Optional[str]               # ID of the specific document being processed.
+                                             # Remains alongside workspace_id so per-file
+                                             # agents (chunking, embedding) still know which
+                                             # file they are working on.
     file_path: Optional[str]                 # Local path to the uploaded file
     file_type: Optional[str]                 # 'pdf' or 'docx'
     

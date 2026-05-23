@@ -31,6 +31,18 @@ def get_db():
 
 
 def init_db():
-    """Create all tables. Called on application startup."""
-    import app.models  # Ensure models are loaded before creating tables
+    """
+    Create all tables directly from SQLAlchemy metadata.
+
+    Use this ONLY in development / testing when you want a clean DB
+    without running Alembic migrations.
+
+    In production (or after the first alembic migration has been applied)
+    use Alembic instead:
+        alembic upgrade head
+
+    This function is still called on startup via main.py for convenience
+    in environments that have not run Alembic yet.
+    """
+    import app.models  # Ensure ALL models (including Workspace) are loaded
     Base.metadata.create_all(bind=engine)

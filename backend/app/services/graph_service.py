@@ -1,9 +1,11 @@
 """
 Service for managing the Knowledge Graph using Neo4j.
 
-Supports document-scoped graphs: each node and edge is tagged with a
-document_id so graphs from different documents can coexist in the same
-Neo4j database and be queried independently.
+All nodes and edges carry two scoping properties:
+  - workspace_id : top-level isolation — ALL queries are filtered by this
+  - document_id  : per-file traceability within the workspace
+
+This mirrors the same dual-ID strategy used in ChromaDB (Layer 4).
 """
 
 from typing import List, Dict, Any, Optional
@@ -31,11 +33,13 @@ class GraphService:
         self.driver.close()
 
     def _create_constraints(self):
-        """Create indexes for efficient document-scoped queries."""
+        """Create indexes for efficient workspace-scoped and document-scoped queries."""
         queries = [
-            # Composite index on name + document_id for fast lookups
-            "CREATE INDEX entity_doc_idx IF NOT EXISTS FOR (e:Entity) ON (e.name, e.document_id)",
-            # Index on document_id alone for full-document queries
+            # Primary: composite index on name + workspace_id
+            "CREATE INDEX entity_ws_idx IF NOT EXISTS FOR (e:Entity) ON (e.name, e.workspace_id)",
+            # workspace_id alone — for full-workspace graph loads
+            "CREATE INDEX entity_wsid_idx IF NOT EXISTS FOR (e:Entity) ON (e.workspace_id)",
+            # document_id alone — for per-file traceability queries
             "CREATE INDEX entity_docid_idx IF NOT EXISTS FOR (e:Entity) ON (e.document_id)",
         ]
         try:
@@ -49,23 +53,34 @@ class GraphService:
     # LLM-extracted entity/relationship storage
     # ─────────────────────────────────────────────────────────────────
 
-    def create_entities(self, entities: List[Entity], document_id: str = None) -> None:
-        """Create or merge multiple entities into the graph, scoped by document_id."""
+    def create_entities(
+        self,
+        entities: List[Entity],
+        document_id: str = None,
+        workspace_id: str = None,
+    ) -> None:
+        """Create or merge entities into the graph, scoped by workspace_id + document_id."""
         if not entities:
             return
 
         query = """
         UNWIND $entities AS e
-        MERGE (n:Entity {name: e.name, document_id: e.document_id})
-        SET n.type = e.type, n.description = e.description
+        MERGE (n:Entity {name: e.name, workspace_id: e.workspace_id})
+        SET n.type = e.type,
+            n.description = e.description,
+            n.document_id = e.document_id
         """
-        
+
+        ws_id = workspace_id or "global"
+        doc_id = document_id or "global"
+
         entities_data = [
             {
                 "name": ent.name,
                 "type": ent.type,
                 "description": ent.description,
-                "document_id": document_id or "global",
+                "workspace_id": ws_id,
+                "document_id": doc_id,
             }
             for ent in entities
         ]
@@ -73,21 +88,29 @@ class GraphService:
         with self.driver.session() as session:
             session.run(query, entities=entities_data)
 
-    def create_relationships(self, relationships: List[Relationship], document_id: str = None) -> None:
-        """Create relationships between entities within the same document scope."""
+    def create_relationships(
+        self,
+        relationships: List[Relationship],
+        document_id: str = None,
+        workspace_id: str = None,
+    ) -> None:
+        """Create relationships between entities within the same workspace scope."""
         if not relationships:
             return
 
+        ws_id = workspace_id or "global"
         doc_id = document_id or "global"
 
         query = """
         UNWIND $rels AS r
-        MATCH (source:Entity {name: r.source, document_id: $doc_id})
-        MATCH (target:Entity {name: r.target, document_id: $doc_id})
+        MATCH (source:Entity {name: r.source, workspace_id: $ws_id})
+        MATCH (target:Entity {name: r.target, workspace_id: $ws_id})
         MERGE (source)-[rel:RELATED_TO {type: r.type}]->(target)
-        SET rel.description = r.description, rel.document_id = $doc_id
+        SET rel.description = r.description,
+            rel.workspace_id = $ws_id,
+            rel.document_id = $doc_id
         """
-        
+
         rels_data = [
             {
                 "source": r.source,
@@ -99,22 +122,29 @@ class GraphService:
         ]
 
         with self.driver.session() as session:
-            session.run(query, rels=rels_data, doc_id=doc_id)
+            session.run(query, rels=rels_data, ws_id=ws_id, doc_id=doc_id)
 
     # ─────────────────────────────────────────────────────────────────
     # Query methods (document-scoped)
     # ─────────────────────────────────────────────────────────────────
 
-    def query_subgraph(self, entity_name: str, depth: int = 1, document_id: str = None) -> Dict[str, Any]:
-        """Retrieve the neighborhood graph around a specific entity."""
-        if document_id:
+    def query_subgraph(
+        self,
+        entity_name: str,
+        depth: int = 1,
+        workspace_id: str = None,
+        document_id: str = None,
+    ) -> Dict[str, Any]:
+        """Retrieve the neighborhood graph around a specific entity, scoped to workspace."""
+        if workspace_id:
             query = f"""
-            MATCH path = (e:Entity {{name: $name, document_id: $doc_id}})-[*1..{int(depth)}]-(connected)
-            WHERE connected.document_id = $doc_id
+            MATCH path = (e:Entity {{name: $name, workspace_id: $ws_id}})-[*1..{int(depth)}]-(connected)
+            WHERE connected.workspace_id = $ws_id
             RETURN path
             """
-            params = {"name": entity_name, "doc_id": document_id}
+            params = {"name": entity_name, "ws_id": workspace_id}
         else:
+            # Legacy fallback: document-scoped
             query = f"""
             MATCH path = (e:Entity {{name: $name}})-[*1..{int(depth)}]-(connected)
             RETURN path
@@ -125,21 +155,27 @@ class GraphService:
             result = session.run(query, **params)
             return self._format_graph_result(result)
 
-    def search_entities(self, search_term: str, limit: int = 10, document_id: str = None) -> List[Dict[str, Any]]:
-        """Search for entities matching a term in their name or description."""
-        if document_id:
+    def search_entities(
+        self,
+        search_term: str,
+        limit: int = 10,
+        workspace_id: str = None,
+        document_id: str = None,
+    ) -> List[Dict[str, Any]]:
+        """Search for entities matching a term, scoped to a workspace."""
+        if workspace_id:
             query = """
-            MATCH (e:Entity {document_id: $doc_id})
-            WHERE toLower(e.name) CONTAINS toLower($term) 
+            MATCH (e:Entity {workspace_id: $ws_id})
+            WHERE toLower(e.name) CONTAINS toLower($term)
                OR toLower(e.description) CONTAINS toLower($term)
             RETURN e.name AS name, e.type AS type, e.description AS description
             LIMIT $limit
             """
-            params = {"term": search_term, "limit": limit, "doc_id": document_id}
+            params = {"term": search_term, "limit": limit, "ws_id": workspace_id}
         else:
             query = """
             MATCH (e:Entity)
-            WHERE toLower(e.name) CONTAINS toLower($term) 
+            WHERE toLower(e.name) CONTAINS toLower($term)
                OR toLower(e.description) CONTAINS toLower($term)
             RETURN e.name AS name, e.type AS type, e.description AS description
             LIMIT $limit
@@ -150,21 +186,27 @@ class GraphService:
             result = session.run(query, **params)
             return [record.data() for record in result]
 
-    def get_full_graph(self, limit: int = 500, document_id: str = None) -> Dict[str, Any]:
+    def get_full_graph(
+        self,
+        limit: int = 500,
+        workspace_id: str = None,
+        document_id: str = None,
+    ) -> Dict[str, Any]:
         """
         Retrieve the graph for frontend visualization.
-        If document_id is provided, only return nodes/edges for that document.
-        Otherwise, return the entire graph.
+        Primary filter: workspace_id (returns all documents in the workspace merged).
+        Secondary filter: document_id (narrows to a single file — for per-doc views).
         """
-        if document_id:
+        if workspace_id:
             query = """
-            MATCH (n:Entity {document_id: $doc_id})
-            OPTIONAL MATCH (n)-[r]-(m:Entity {document_id: $doc_id})
+            MATCH (n:Entity {workspace_id: $ws_id})
+            OPTIONAL MATCH (n)-[r]-(m:Entity {workspace_id: $ws_id})
             RETURN n, r, m
             LIMIT $limit
             """
-            params = {"limit": limit, "doc_id": document_id}
+            params = {"limit": limit, "ws_id": workspace_id}
         else:
+            # Legacy: full global graph (no filter)
             query = """
             MATCH (n:Entity)
             OPTIONAL MATCH (n)-[r]-(m:Entity)
@@ -177,23 +219,30 @@ class GraphService:
             result = session.run(query, **params)
             return self._format_graph_result(result)
 
-    def get_graph_stats(self, document_id: str = None) -> Dict[str, Any]:
-        """Get statistics about the knowledge graph."""
-        if document_id:
-            query_nodes = "MATCH (n:Entity {document_id: $doc_id}) RETURN count(n) as node_count"
-            query_edges = "MATCH (a:Entity {document_id: $doc_id})-[r]-(b:Entity {document_id: $doc_id}) RETURN count(r) as edge_count"
+    def get_graph_stats(
+        self,
+        workspace_id: str = None,
+        document_id: str = None,
+    ) -> Dict[str, Any]:
+        """Get statistics about the knowledge graph, scoped to a workspace."""
+        if workspace_id:
+            query_nodes = "MATCH (n:Entity {workspace_id: $ws_id}) RETURN count(n) AS node_count"
+            query_edges = """
+            MATCH (a:Entity {workspace_id: $ws_id})-[r]-(b:Entity {workspace_id: $ws_id})
+            RETURN count(r) AS edge_count
+            """
             query_top = """
-            MATCH (n:Entity {document_id: $doc_id})-[r]-() 
-            RETURN n.name as name, count(r) as degree 
+            MATCH (n:Entity {workspace_id: $ws_id})-[r]-()
+            RETURN n.name AS name, count(r) AS degree
             ORDER BY degree DESC LIMIT 5
             """
-            params = {"doc_id": document_id}
+            params = {"ws_id": workspace_id}
         else:
-            query_nodes = "MATCH (n:Entity) RETURN count(n) as node_count"
-            query_edges = "MATCH ()-[r]->() RETURN count(r) as edge_count"
+            query_nodes = "MATCH (n:Entity) RETURN count(n) AS node_count"
+            query_edges = "MATCH ()-[r]->() RETURN count(r) AS edge_count"
             query_top = """
-            MATCH (n:Entity)-[r]-() 
-            RETURN n.name as name, count(r) as degree 
+            MATCH (n:Entity)-[r]-()
+            RETURN n.name AS name, count(r) AS degree
             ORDER BY degree DESC LIMIT 5
             """
             params = {}
@@ -203,7 +252,7 @@ class GraphService:
             stats["node_count"] = session.run(query_nodes, **params).single()["node_count"]
             stats["edge_count"] = session.run(query_edges, **params).single()["edge_count"]
             stats["most_connected"] = [record.data() for record in session.run(query_top, **params)]
-            
+
         return stats
 
     def cypher_query(self, query: str, parameters: dict = None) -> List[Dict[str, Any]]:
@@ -217,7 +266,7 @@ class GraphService:
         query = """
         MATCH (n:Entity {document_id: $doc_id})
         DETACH DELETE n
-        RETURN count(n) as deleted_count
+        RETURN count(n) AS deleted_count
         """
         with self.driver.session() as session:
             result = session.run(query, doc_id=document_id)
@@ -226,54 +275,85 @@ class GraphService:
             logger.info(f"Deleted {count} nodes for document {document_id}")
             return {"deleted_nodes": count}
 
+    def delete_workspace_graph(self, workspace_id: str) -> Dict[str, int]:
+        """
+        Delete ALL nodes and relationships belonging to a workspace.
+        Called when a workspace is deleted entirely.
+        """
+        query = """
+        MATCH (n:Entity {workspace_id: $ws_id})
+        DETACH DELETE n
+        RETURN count(n) AS deleted_count
+        """
+        with self.driver.session() as session:
+            result = session.run(query, ws_id=workspace_id)
+            record = result.single()
+            count = record["deleted_count"] if record else 0
+            logger.info(f"Deleted {count} nodes for workspace {workspace_id}")
+            return {"deleted_nodes": count}
+
     # ─────────────────────────────────────────────────────────────────
     # Co-occurrence graph storage (InfraNodus-style)
     # ─────────────────────────────────────────────────────────────────
 
-    def create_cooccurrence_nodes(self, nodes: List[Dict[str, Any]], document_id: str = None) -> None:
+    def create_cooccurrence_nodes(
+        self,
+        nodes: List[Dict[str, Any]],
+        document_id: str = None,
+        workspace_id: str = None,
+    ) -> None:
         """
         Create or merge co-occurrence word nodes into the graph.
-        Each node is scoped to a document_id.
+        Scoped by workspace_id (primary) and document_id (traceability).
         """
         if not nodes:
             return
 
+        ws_id = workspace_id or "global"
         doc_id = document_id or "global"
 
         query = """
         UNWIND $nodes AS n
-        MERGE (e:Entity {name: n.name, document_id: $doc_id})
+        MERGE (e:Entity {name: n.name, workspace_id: $ws_id})
         SET e.frequency = COALESCE(e.frequency, 0) + n.frequency,
-            e.type = COALESCE(e.type, 'CONCEPT')
+            e.type = COALESCE(e.type, 'CONCEPT'),
+            e.document_id = $doc_id
         """
 
         with self.driver.session() as session:
-            session.run(query, nodes=nodes, doc_id=doc_id)
-            logger.info(f"Merged {len(nodes)} co-occurrence nodes for doc {doc_id}")
+            session.run(query, nodes=nodes, ws_id=ws_id, doc_id=doc_id)
+            logger.info(f"Merged {len(nodes)} co-occurrence nodes for ws={ws_id}, doc={doc_id}")
 
-    def create_cooccurrence_edges(self, edges: List[Dict[str, Any]], document_id: str = None) -> None:
+    def create_cooccurrence_edges(
+        self,
+        edges: List[Dict[str, Any]],
+        document_id: str = None,
+        workspace_id: str = None,
+    ) -> None:
         """
         Create or merge co-occurrence edges with cumulative weights.
-        Edges are scoped to the same document_id.
+        Edges are scoped to the same workspace_id.
         """
         if not edges:
             return
 
+        ws_id = workspace_id or "global"
         doc_id = document_id or "global"
 
         query = """
         UNWIND $edges AS e
-        MATCH (source:Entity {name: e.source, document_id: $doc_id})
-        MATCH (target:Entity {name: e.target, document_id: $doc_id})
+        MATCH (source:Entity {name: e.source, workspace_id: $ws_id})
+        MATCH (target:Entity {name: e.target, workspace_id: $ws_id})
         MERGE (source)-[r:CO_OCCURS]-(target)
         SET r.weight = COALESCE(r.weight, 0) + e.weight,
             r.type = 'CO_OCCURS',
+            r.workspace_id = $ws_id,
             r.document_id = $doc_id
         """
 
         with self.driver.session() as session:
-            session.run(query, edges=edges, doc_id=doc_id)
-            logger.info(f"Merged {len(edges)} co-occurrence edges for doc {doc_id}")
+            session.run(query, edges=edges, ws_id=ws_id, doc_id=doc_id)
+            logger.info(f"Merged {len(edges)} co-occurrence edges for ws={ws_id}, doc={doc_id}")
 
     # ─────────────────────────────────────────────────────────────────
     # Formatting helper
@@ -322,6 +402,7 @@ class GraphService:
                         "type": item.get("type"),
                         "description": item.get("description"),
                         "frequency": item.get("frequency"),
+                        "workspace_id": item.get("workspace_id"),
                         "document_id": item.get("document_id"),
                     }
                 # Check if it's a Relationship

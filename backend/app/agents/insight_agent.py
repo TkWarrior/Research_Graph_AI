@@ -4,6 +4,9 @@ and generating AI-powered insights, gap-bridging questions, and blind spots.
 
 InfraNodus-style: The LLM receives structural analysis (centrality,
 communities, gaps) and generates insights based on the graph's topology.
+
+All analysis is scoped to a workspace_id so insights are isolated
+per workspace and never bleed across projects.
 """
 
 from langchain_groq import ChatGroq
@@ -83,7 +86,7 @@ BLIND_SPOTS_PROMPT = """You are an expert research advisor analyzing a knowledge
 ## The Network Has These Characteristics:
 - {node_count} concepts, {edge_count} connections
 - {num_clusters} topic clusters
-- Density: {density} ({"sparse" if density < 0.1 else "moderate" if density < 0.3 else "dense"})
+- Density: {density} ({density_description})
 
 ## Task
 Identify 3-5 potential blind spots — topics, perspectives, or connections that are MISSING from this knowledge base but would be expected given the existing topics. 
@@ -109,11 +112,18 @@ def _get_llm():
     )
 
 
-def _run_analysis():
-    """Fetch graph data and run full network analysis."""
+def _run_analysis(workspace_id: str = None):
+    """
+    Fetch graph data for the given workspace and run full network analysis.
+
+    workspace_id is required for production use. Omitting it causes the
+    global Neo4j graph to be analysed (all workspaces merged) which is
+    only acceptable in single-user / dev environments.
+    """
     graph_service = GraphService()
     try:
-        data = graph_service.get_full_graph(limit=1000)
+        # Pass workspace_id so only this workspace's nodes/edges are loaded
+        data = graph_service.get_full_graph(limit=1000, workspace_id=workspace_id)
     finally:
         graph_service.close()
 
@@ -170,9 +180,13 @@ def _format_gaps(analysis):
 # ══════════════════════════════════════════════════════════════════════
 
 def insight_agent_node(state: ResearchState) -> dict:
-    """Analyzes the knowledge graph using network science and generates AI insights."""
-    
-    data, analysis = _run_analysis()
+    """Analyzes the workspace knowledge graph and generates AI-powered insights."""
+    workspace_id = state.get("workspace_id")   # scope this analysis to one workspace
+
+    if not workspace_id:
+        logger.warning("insight_agent_node called without workspace_id — analysing global graph.")
+
+    data, analysis = _run_analysis(workspace_id=workspace_id)
     
     if analysis is None:
         return {"insights": ["No graph data available to analyze."], "current_step": "insight_generation_empty"}
@@ -212,9 +226,12 @@ def insight_agent_node(state: ResearchState) -> dict:
 # Standalone Functions (called directly by API, not via LangGraph)
 # ══════════════════════════════════════════════════════════════════════
 
-def generate_gap_bridge_questions(gap_index: int = 0):
-    """Generate research questions to bridge a specific structural gap."""
-    data, analysis = _run_analysis()
+def generate_gap_bridge_questions(gap_index: int = 0, workspace_id: str = None):
+    """
+    Generate research questions to bridge a specific structural gap.
+    workspace_id scopes the analysis to one workspace.
+    """
+    data, analysis = _run_analysis(workspace_id=workspace_id)
     if analysis is None:
         return {"questions": [], "error": "No graph data available."}
 
@@ -247,9 +264,12 @@ def generate_gap_bridge_questions(gap_index: int = 0):
         return {"questions": [], "error": str(e)}
 
 
-def generate_blind_spots():
-    """Identify missing topics or perspectives in the knowledge graph."""
-    data, analysis = _run_analysis()
+def generate_blind_spots(workspace_id: str = None):
+    """
+    Identify missing topics or perspectives in the knowledge graph.
+    workspace_id scopes the analysis to one workspace.
+    """
+    data, analysis = _run_analysis(workspace_id=workspace_id)
     if analysis is None:
         return {"blind_spots": "", "error": "No graph data available."}
 
@@ -262,13 +282,17 @@ def generate_blind_spots():
         prompt = ChatPromptTemplate.from_template(BLIND_SPOTS_PROMPT)
         chain = prompt | llm
 
+        density = stats.get("density", 0)
+        density_desc = "sparse" if density < 0.1 else "moderate" if density < 0.3 else "dense"
+
         response = chain.invoke({
             "clusters_summary": _format_clusters(analysis),
             "top_concepts": ", ".join([c["name"] for c in centrality[:15]]),
             "node_count": stats.get("node_count", 0),
             "edge_count": stats.get("edge_count", 0),
             "num_clusters": len(communities.get("clusters", [])),
-            "density": stats.get("density", 0),
+            "density": density,
+            "density_description": density_desc,
         })
 
         return {"blind_spots": response.content}

@@ -17,15 +17,22 @@ router = APIRouter()
 
 
 @router.get("/", response_model=ChatSessionListResponse)
-def list_sessions(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
-    """List all chat sessions, ordered by most recent."""
-    sessions = db.query(ChatSession).order_by(ChatSession.updated_at.desc()).offset(skip).limit(limit).all()
-    total = db.query(ChatSession).count()
-    
-    # Calculate message counts
+def list_sessions(
+    workspace_id: str = None,
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+):
+    """List chat sessions. Filter by workspace_id when provided."""
+    query = db.query(ChatSession).order_by(ChatSession.updated_at.desc())
+    if workspace_id:
+        query = query.filter(ChatSession.workspace_id == workspace_id)
+    sessions = query.offset(skip).limit(limit).all()
+    total = query.count()  # ← Use filtered query count
+
     for session in sessions:
         session.message_count = len(session.messages)
-        
+
     return ChatSessionListResponse(sessions=sessions, total=total)
 
 
@@ -40,10 +47,10 @@ def get_session(session_id: str, db: Session = Depends(get_db)):
 
 @router.post("/", response_model=ChatSessionOut)
 def create_session(request: ChatSessionCreateRequest, db: Session = Depends(get_db)):
-    """Manually create a new empty chat session."""
+    """Manually create a new empty chat session in a workspace."""
     session = ChatSession(
         title=request.title or "New Chat",
-        document_id=request.document_id
+        workspace_id=str(request.workspace_id),   # ← workspace scope
     )
     db.add(session)
     db.commit()

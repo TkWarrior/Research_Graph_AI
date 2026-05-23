@@ -30,8 +30,8 @@ const Header = () => {
       </div>
 
       <nav style={{ display: 'flex', gap: '8px' }}>
-        <NavLink 
-          to="/" 
+        <NavLink
+          to="/"
           style={({isActive}) => ({
             textDecoration: 'none',
             color: isActive ? 'white' : 'var(--text-secondary)',
@@ -46,9 +46,9 @@ const Header = () => {
         >
           <Upload size={18} /> Dashboard
         </NavLink>
-        
-        <NavLink 
-          to="/graph" 
+
+        <NavLink
+          to="/graph"
           style={({isActive}) => ({
             textDecoration: 'none',
             color: isActive ? 'white' : 'var(--text-secondary)',
@@ -63,9 +63,9 @@ const Header = () => {
         >
           <Network size={18} /> Graph Explorer
         </NavLink>
-        
-        <NavLink 
-          to="/research" 
+
+        <NavLink
+          to="/research"
           style={({isActive}) => ({
             textDecoration: 'none',
             color: isActive ? 'white' : 'var(--text-secondary)',

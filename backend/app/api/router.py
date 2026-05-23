@@ -16,7 +16,11 @@ from app.api.insights import router as insights_router
 from app.api.sessions import router as sessions_router
 from app.api.analytics import router as analytics_router
 from app.api.text_input import router as text_input_router
+from app.api.workspaces import router as workspaces_router
+# from app.api.auth import router as auth_router  # TODO: re-enable when auth is ready
 
+# api_router.include_router(auth_router, prefix="/auth", tags=["Auth"])  # TODO: re-enable
+api_router.include_router(workspaces_router, prefix="/workspaces", tags=["Workspaces"])
 api_router.include_router(upload_router, prefix="/upload", tags=["Upload"])
 api_router.include_router(query_router, prefix="/query", tags=["Query"])
 api_router.include_router(ask_router, prefix="/ask", tags=["Q&A"])
@@ -34,6 +38,7 @@ async def api_root():
         "message": "Autonomous Multi-Agent Research System API",
         "endpoints": [
             "/api/health",
+            "/api/workspaces",
             "/api/upload",
             "/api/query",
             "/api/ask",

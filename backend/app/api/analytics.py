@@ -1,19 +1,19 @@
 """
 Analytics API — InfraNodus-style graph analytics endpoints.
 
-All endpoints accept an optional `document_id` query parameter
-to scope the analysis to a single document's graph.
+All endpoints require a `workspace_id` query parameter to scope
+the analysis to a single workspace's graph. Without it the call
+is rejected so cross-workspace data leakage is impossible.
 
 Provides:
-  GET /api/analytics/full       — Complete network analysis
-  GET /api/analytics/centrality — Top nodes by betweenness centrality
-  GET /api/analytics/communities— Community/cluster detection
-  GET /api/analytics/gaps       — Structural gaps between clusters
-  GET /api/analytics/stats      — Network-level statistics
+  GET /api/analytics/full                 — Complete network analysis
+  GET /api/analytics/centrality           — Top nodes by betweenness centrality
+  GET /api/analytics/communities          — Community/cluster detection
+  GET /api/analytics/gaps                 — Structural gaps between clusters
+  GET /api/analytics/stats                — Network-level statistics
   GET /api/analytics/graph-with-analytics — Enriched graph for frontend
 """
 
-from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from loguru import logger
 
@@ -23,11 +23,11 @@ from app.services.network_analysis_service import NetworkAnalysisService
 router = APIRouter()
 
 
-def _get_graph_data(limit: int = 1000, document_id: str = None):
-    """Fetch raw node/edge data from Neo4j, optionally scoped to a document."""
+def _get_graph_data(limit: int = 1000, workspace_id: str = None):
+    """Fetch raw node/edge data from Neo4j, scoped to a workspace."""
     graph_service = GraphService()
     try:
-        data = graph_service.get_full_graph(limit=limit, document_id=document_id)
+        data = graph_service.get_full_graph(limit=limit, workspace_id=workspace_id)
         return data
     finally:
         graph_service.close()
@@ -35,16 +35,16 @@ def _get_graph_data(limit: int = 1000, document_id: str = None):
 
 @router.get("/full")
 async def full_analysis(
+    workspace_id: str = Query(..., description="Workspace ID to scope analysis"),
     limit: int = 1000,
-    document_id: Optional[str] = Query(default=None, description="Scope analysis to a specific document"),
 ):
     """
-    Run the complete InfraNodus-style analysis on the knowledge graph.
+    Run the complete InfraNodus-style analysis on the workspace knowledge graph.
     Returns centrality, communities, structural gaps, pagerank, and stats.
     """
     try:
-        data = _get_graph_data(limit, document_id=document_id)
-        
+        data = _get_graph_data(limit, workspace_id=workspace_id)
+
         if not data["nodes"]:
             return {
                 "centrality": [],
@@ -53,7 +53,7 @@ async def full_analysis(
                 "pagerank": [],
                 "stats": {"node_count": 0, "edge_count": 0},
             }
-        
+
         analyzer = NetworkAnalysisService()
         result = analyzer.full_analysis(data["nodes"], data["edges"])
         return result
@@ -64,13 +64,13 @@ async def full_analysis(
 
 @router.get("/centrality")
 async def get_centrality(
+    workspace_id: str = Query(..., description="Workspace ID to scope analysis"),
     top_n: int = 20,
     limit: int = 1000,
-    document_id: Optional[str] = Query(default=None),
 ):
     """Get the top-N nodes ranked by betweenness centrality."""
     try:
-        data = _get_graph_data(limit, document_id=document_id)
+        data = _get_graph_data(limit, workspace_id=workspace_id)
         analyzer = NetworkAnalysisService()
         G = analyzer._build_nx_graph(data["nodes"], data["edges"])
         return {"centrality": analyzer.betweenness_centrality(G, top_n=top_n)}
@@ -81,22 +81,20 @@ async def get_centrality(
 
 @router.get("/communities")
 async def get_communities(
+    workspace_id: str = Query(..., description="Workspace ID to scope analysis"),
     limit: int = 1000,
-    document_id: Optional[str] = Query(default=None),
 ):
     """Detect topical clusters using Louvain community detection."""
     try:
-        data = _get_graph_data(limit, document_id=document_id)
+        data = _get_graph_data(limit, workspace_id=workspace_id)
         analyzer = NetworkAnalysisService()
         G = analyzer._build_nx_graph(data["nodes"], data["edges"])
         communities = analyzer.detect_communities(G)
-        
-        response = {
+        return {
             "clusters": communities["clusters"],
             "modularity": communities["modularity"],
             "total_clusters": len(communities["clusters"]),
         }
-        return response
     except Exception as e:
         logger.error(f"Community detection failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -104,13 +102,13 @@ async def get_communities(
 
 @router.get("/gaps")
 async def get_structural_gaps(
+    workspace_id: str = Query(..., description="Workspace ID to scope analysis"),
     max_gaps: int = 5,
     limit: int = 1000,
-    document_id: Optional[str] = Query(default=None),
 ):
     """Find structural gaps — weakly connected cluster pairs."""
     try:
-        data = _get_graph_data(limit, document_id=document_id)
+        data = _get_graph_data(limit, workspace_id=workspace_id)
         analyzer = NetworkAnalysisService()
         G = analyzer._build_nx_graph(data["nodes"], data["edges"])
         communities = analyzer.detect_communities(G)
@@ -123,12 +121,12 @@ async def get_structural_gaps(
 
 @router.get("/stats")
 async def get_network_stats(
+    workspace_id: str = Query(..., description="Workspace ID to scope analysis"),
     limit: int = 1000,
-    document_id: Optional[str] = Query(default=None),
 ):
-    """Get high-level network statistics."""
+    """Get high-level network statistics for the workspace graph."""
     try:
-        data = _get_graph_data(limit, document_id=document_id)
+        data = _get_graph_data(limit, workspace_id=workspace_id)
         analyzer = NetworkAnalysisService()
         G = analyzer._build_nx_graph(data["nodes"], data["edges"])
         stats = analyzer.network_stats(G)
@@ -140,42 +138,42 @@ async def get_network_stats(
 
 @router.get("/graph-with-analytics")
 async def get_graph_with_analytics(
+    workspace_id: str = Query(..., description="Workspace ID to scope analysis"),
     limit: int = 1000,
-    document_id: Optional[str] = Query(default=None, description="Scope to a specific document"),
 ):
     """
-    Returns the full graph data enriched with per-node analytics:
-    each node gets a centrality score and community assignment.
-    Designed for direct consumption by the frontend visualization.
+    Returns the workspace graph enriched with per-node analytics:
+    centrality score, pagerank, and community assignment.
+    Designed for direct consumption by the frontend Sigma.js visualisation.
     """
     try:
-        data = _get_graph_data(limit, document_id=document_id)
-        
+        data = _get_graph_data(limit, workspace_id=workspace_id)
+
         if not data["nodes"]:
             return {"nodes": [], "edges": [], "communities": {"clusters": []}}
-        
+
         analyzer = NetworkAnalysisService()
         G = analyzer._build_nx_graph(data["nodes"], data["edges"])
-        
+
         # Compute analytics
-        bc = dict(
-            (item["name"], item["centrality"])
+        bc = {
+            item["name"]: item["centrality"]
             for item in analyzer.betweenness_centrality(G, top_n=9999)
-        )
+        }
         communities = analyzer.detect_communities(G)
         node_communities = communities.get("node_communities", {})
-        
-        pr = dict(
-            (item["name"], item["pagerank"])
+        pr = {
+            item["name"]: item["pagerank"]
             for item in analyzer.compute_pagerank(G, top_n=9999)
-        )
+        }
 
         # Build cluster color lookup
-        cluster_colors = {}
-        for cluster in communities.get("clusters", []):
-            cluster_colors[cluster["id"]] = cluster["color"]
+        cluster_colors = {
+            cluster["id"]: cluster["color"]
+            for cluster in communities.get("clusters", [])
+        }
 
-        # Enrich nodes
+        # Enrich nodes with analytics metadata
         enriched_nodes = []
         for node in data["nodes"]:
             name = node.get("name") or node.get("id")
