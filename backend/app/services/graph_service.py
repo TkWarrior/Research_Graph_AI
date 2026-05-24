@@ -219,6 +219,81 @@ class GraphService:
             result = session.run(query, **params)
             return self._format_graph_result(result)
 
+    def get_seed_graph(
+        self,
+        limit: int = 5,
+        workspace_id: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Return the top-N hub nodes (ranked by degree) plus the edges that
+        exist between those hub nodes only.  This is the *initial* view
+        shown to the user before any incremental expansion.
+        """
+        if workspace_id:
+            query = """
+            MATCH (n:Entity {workspace_id: $ws_id})-[r]-()
+            WITH n, count(r) AS degree
+            ORDER BY degree DESC
+            LIMIT $limit
+            WITH collect(n) AS hubs
+            UNWIND hubs AS n
+            OPTIONAL MATCH (n)-[r]-(m)
+            WHERE m IN hubs
+            RETURN n, r, m
+            """
+            params = {"limit": limit, "ws_id": workspace_id}
+        else:
+            query = """
+            MATCH (n:Entity)-[r]-()
+            WITH n, count(r) AS degree
+            ORDER BY degree DESC
+            LIMIT $limit
+            WITH collect(n) AS hubs
+            UNWIND hubs AS n
+            OPTIONAL MATCH (n)-[r]-(m)
+            WHERE m IN hubs
+            RETURN n, r, m
+            """
+            params = {"limit": limit}
+
+        with self.driver.session() as session:
+            result = session.run(query, **params)
+            return self._format_graph_result(result)
+
+    def get_node_neighbors(
+        self,
+        node_name: str,
+        workspace_id: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Return the direct (depth-1) neighbors of a node plus all edges
+        between those neighbors and the pivot node.  Used for incremental
+        graph expansion when the user clicks a node in the frontend.
+        """
+        if workspace_id:
+            query = """
+            MATCH (pivot:Entity {name: $name, workspace_id: $ws_id})
+            OPTIONAL MATCH (pivot)-[r]-(neighbor:Entity {workspace_id: $ws_id})
+            RETURN pivot, r, neighbor
+            """
+            params = {"name": node_name, "ws_id": workspace_id}
+        else:
+            query = """
+            MATCH (pivot:Entity {name: $name})
+            OPTIONAL MATCH (pivot)-[r]-(neighbor:Entity)
+            RETURN pivot, r, neighbor
+            """
+            params = {"name": node_name}
+
+        with self.driver.session() as session:
+            result = session.run(query, **params)
+            data = self._format_graph_result(result)
+            logger.info(
+                f"Neighbors of '{node_name}': "
+                f"{len(data['nodes'])} nodes, {len(data['edges'])} edges"
+            )
+            return data
+
     def get_graph_stats(
         self,
         workspace_id: str = None,

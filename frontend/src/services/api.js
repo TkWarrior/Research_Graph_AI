@@ -107,6 +107,18 @@ export const api = {
     const res = await apiClient.get(`/graph/stats?workspace_id=${workspaceId}`);
     return res.data;
   },
+  // Incremental exploration: initial seed (top-N hub nodes)
+  getSeedGraph: async (limit = 5, workspaceId) => {
+    const res = await apiClient.get(`/graph/seed?limit=${limit}&workspace_id=${workspaceId}`);
+    return res.data;
+  },
+  // Incremental exploration: depth-1 neighbors of a node
+  getNeighbors: async (nodeName, workspaceId) => {
+    const res = await apiClient.get(
+      `/graph/neighbors/${encodeURIComponent(nodeName)}?workspace_id=${workspaceId}`
+    );
+    return res.data;
+  },
   deleteDocumentGraph: async (documentId) => {
     const res = await apiClient.delete(`/graph/document/${documentId}`);
     return res.data;

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BarChart3, TrendingUp, Circle, Zap, Network, Layers, Brain, Lightbulb, Search } from 'lucide-react';
+import { BarChart3, TrendingUp, Zap, Network, Brain, Lightbulb, Search } from 'lucide-react';
 import { api } from '../services/api';
 import { useWorkspace } from '../context/WorkspaceContext';
 
@@ -11,8 +11,7 @@ const AnalyticsPanel = ({ analytics, onClose }) => {
 
   if (!analytics) return null;
 
-  const { centrality = [], communities = {}, gaps = [], stats = {} } = analytics;
-  const clusters = communities.clusters || [];
+  const { centrality = [], gaps = [], stats = {} } = analytics;
 
   const handleAiAction = async (action, label) => {
     setAiLoading(true);
@@ -82,38 +81,7 @@ const AnalyticsPanel = ({ analytics, onClose }) => {
         </div>
       </div>
 
-      {/* Topic Clusters */}
-      <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--glass-border)' }}>
-        <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--text-secondary)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <Layers size={14} /> Topic Clusters ({clusters.length})
-        </h4>
-        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-          Modularity: <span style={{ color: '#4ECDC4', fontWeight: 600 }}>{(communities.modularity || 0).toFixed(3)}</span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          {clusters.slice(0, 8).map((cluster) => (
-            <div key={cluster.id} style={{
-              display: 'flex', alignItems: 'center', gap: '8px',
-              padding: '6px 10px',
-              background: 'rgba(255,255,255,0.03)',
-              borderRadius: '6px',
-              borderLeft: `3px solid ${cluster.color}`,
-            }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: '0.8rem', fontWeight: 600, color: cluster.color }}>
-                  Cluster {cluster.id + 1}
-                </div>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                  {cluster.members?.slice(0, 3).join(', ')}{cluster.members?.length > 3 ? '...' : ''}
-                </div>
-              </div>
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                {cluster.size} nodes
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
+
 
       {/* Top Bridge Nodes (Centrality) */}
       <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--glass-border)' }}>
@@ -148,46 +116,7 @@ const AnalyticsPanel = ({ analytics, onClose }) => {
         </div>
       </div>
 
-      {/* Structural Gaps */}
-      {gaps.length > 0 && (
-        <div style={{ padding: '14px 16px' }}>
-          <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--text-secondary)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Zap size={14} /> Structural Gaps
-          </h4>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-            Disconnected cluster pairs — potential research opportunities
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {gaps.slice(0, 4).map((gap, i) => (
-              <div key={i} style={{
-                padding: '8px 10px',
-                background: gap.gap_strength === 'strong' 
-                  ? 'rgba(255, 107, 107, 0.08)' 
-                  : 'rgba(255, 159, 28, 0.06)',
-                borderRadius: '6px',
-                border: `1px solid ${gap.gap_strength === 'strong' ? 'rgba(255,107,107,0.2)' : 'rgba(255,159,28,0.15)'}`,
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                  <Circle size={8} fill={gap.cluster_a.color} stroke="none" />
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>↔</span>
-                  <Circle size={8} fill={gap.cluster_b.color} stroke="none" />
-                  <span style={{ 
-                    fontSize: '0.65rem', 
-                    color: gap.gap_strength === 'strong' ? '#FF6B6B' : '#FF9F1C',
-                    fontWeight: 600,
-                    marginLeft: 'auto',
-                  }}>
-                    {gap.gap_strength === 'strong' ? 'NO CONNECTION' : `${gap.inter_edges} edges`}
-                  </span>
-                </div>
-                <div style={{ fontSize: '0.7rem', color: '#ccc' }}>
-                  {gap.cluster_a.top_nodes.join(', ')} ↔ {gap.cluster_b.top_nodes.join(', ')}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+
 
       {/* AI-Powered Actions */}
       <div style={{ padding: '14px 16px', borderTop: '1px solid var(--glass-border)' }}>
@@ -209,12 +138,12 @@ const AnalyticsPanel = ({ analytics, onClose }) => {
           </button>
           <button
             onClick={() => handleAiAction('bridge', 'Bridge Questions')}
-            disabled={aiLoading || gaps.length === 0}
+            disabled={aiLoading}
             style={{
               padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '8px',
               background: 'rgba(78, 205, 196, 0.1)', border: '1px solid rgba(78, 205, 196, 0.2)',
               borderRadius: '6px', cursor: 'pointer', color: '#fff', fontSize: '0.8rem',
-              opacity: (aiLoading || gaps.length === 0) ? 0.6 : 1, transition: 'all 0.2s ease',
+              opacity: aiLoading ? 0.6 : 1, transition: 'all 0.2s ease',
             }}
           >
             <Zap size={14} color="#4ECDC4" /> Bridge Gaps

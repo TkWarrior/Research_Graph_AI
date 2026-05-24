@@ -28,6 +28,38 @@ def get_full_graph(
         service.close()
 
 
+@router.get("/seed", response_model=Dict[str, Any])
+def get_seed_graph(
+    workspace_id: str = Query(..., description="Workspace ID to scope the graph"),
+    limit: int = Query(5, description="Number of top hub nodes to return"),
+):
+    """
+    Return the top-N hub nodes (by degree) plus edges among them.
+    This is the lightweight initial graph shown before any user exploration.
+    """
+    service = GraphService()
+    try:
+        return service.get_seed_graph(limit=limit, workspace_id=workspace_id)
+    finally:
+        service.close()
+
+
+@router.get("/neighbors/{node_name}", response_model=Dict[str, Any])
+def get_node_neighbors(
+    node_name: str,
+    workspace_id: str = Query(..., description="Workspace ID to scope the graph"),
+):
+    """
+    Return the direct (depth-1) neighbors of a node.
+    Called when the user clicks a node to expand it incrementally.
+    """
+    service = GraphService()
+    try:
+        return service.get_node_neighbors(node_name, workspace_id=workspace_id)
+    finally:
+        service.close()
+
+
 @router.get("/subgraph/{entity_name}", response_model=Dict[str, Any])
 def get_subgraph(
     entity_name: str,

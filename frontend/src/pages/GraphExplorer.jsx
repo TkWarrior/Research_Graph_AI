@@ -3,27 +3,31 @@ import { RefreshCw, LayoutTemplate, BarChart3 } from 'lucide-react';
 import KnowledgeGraph from '../components/KnowledgeGraph';
 import NodePanel from '../components/NodePanel';
 import AnalyticsPanel from '../components/AnalyticsPanel';
-import ClusterFilter from '../components/ClusterFilter';
 import { api } from '../services/api';
 import { useWorkspace } from '../context/WorkspaceContext';
 
+const SEED_LIMIT = 5; // top hub nodes shown on initial load
+
 const GraphExplorer = () => {
   const { activeWorkspace } = useWorkspace();
-  const [graphData, setGraphData] = useState(null);
+  const [seedData, setSeedData] = useState(null);
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedNode, setSelectedNode] = useState(null);
   const [error, setError] = useState(null);
   const [showAnalytics, setShowAnalytics] = useState(true);
-  const [hiddenClusters, setHiddenClusters] = useState(new Set());
+  const [liveNodeCount, setLiveNodeCount] = useState(0);
 
-  const fetchGraphWithAnalytics = useCallback(async () => {
+  const fetchSeedAndAnalytics = useCallback(async () => {
     if (!activeWorkspace) return;
     setLoading(true);
     setError(null);
     try {
-      const data = await api.getGraphWithAnalytics(1000, activeWorkspace.id);
-      setGraphData({ nodes: data.nodes, edges: data.edges });
+      // Fetch only the top-5 hub nodes for the initial graph view
+      const seed = await api.getSeedGraph(SEED_LIMIT, activeWorkspace.id);
+      setSeedData(seed);
+
+      // Analytics runs in the background and is fine to use the full graph
       const fullAnalytics = await api.getFullAnalysis(1000, activeWorkspace.id);
       setAnalytics(fullAnalytics);
     } catch (err) {
@@ -34,49 +38,23 @@ const GraphExplorer = () => {
     }
   }, [activeWorkspace]);
 
-  // ── Step 1: Immediately wipe stale data when workspace changes ────
-  // This runs SYNCHRONOUSLY before the async fetch so the user never
-  // sees a previous workspace's graph bleeding into the new one.
+  // ── Step 1: Wipe stale data when workspace changes (sync) ────────
   useEffect(() => {
-    setGraphData(null);
+    setSeedData(null);
     setAnalytics(null);
     setSelectedNode(null);
-    setHiddenClusters(new Set());
+    setLiveNodeCount(0);
     setError(null);
   }, [activeWorkspace?.id]);
 
-  // ── Step 2: Fetch new workspace graph data ────────────────────────
+  // ── Step 2: Fetch seed + analytics for the new workspace ─────────
   useEffect(() => {
-    fetchGraphWithAnalytics();
-  }, [fetchGraphWithAnalytics]);
+    fetchSeedAndAnalytics();
+  }, [fetchSeedAndAnalytics]);
 
-  const handleNodeClick = (node) => {
+  const handleNodeSelect = (node) => {
     setSelectedNode(node);
   };
-
-  const handleExploreNeighborhood = async (nodeName) => {
-    if (!activeWorkspace) return;
-    setLoading(true);
-    try {
-      const data = await api.getSubgraph(nodeName, 2, activeWorkspace.id);
-      setGraphData(data);
-    } catch (err) {
-      console.error('Failed to fetch subgraph:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleClusterToggle = (clusterId) => {
-    setHiddenClusters(prev => {
-      const next = new Set(prev);
-      if (next.has(clusterId)) next.delete(clusterId);
-      else next.add(clusterId);
-      return next;
-    });
-  };
-
-  const clusters = analytics?.communities?.clusters || [];
 
   return (
     <div style={{ position: 'relative', width: '100%', height: 'calc(100vh - 80px)' }}>
@@ -98,44 +76,58 @@ const GraphExplorer = () => {
           {activeWorkspace?.name ?? 'No workspace'}
         </div>
 
-        <button onClick={() => fetchGraphWithAnalytics()} className="btn-primary"
-          style={{ padding: '7px 14px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
+        <button
+          id="graph-reset-btn"
+          onClick={() => fetchSeedAndAnalytics()}
+          className="btn-primary"
+          style={{ padding: '7px 14px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}
+        >
           <RefreshCw size={14} /> Reset
         </button>
-        <button onClick={() => setShowAnalytics(!showAnalytics)}
-          style={{ padding: '7px 14px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem',
+
+        <button
+          id="graph-analytics-toggle"
+          onClick={() => setShowAnalytics(!showAnalytics)}
+          style={{
+            padding: '7px 14px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem',
             background: showAnalytics ? 'rgba(77, 150, 255, 0.15)' : 'rgba(255,255,255,0.05)',
             border: `1px solid ${showAnalytics ? 'rgba(77, 150, 255, 0.3)' : 'rgba(255,255,255,0.1)'}`,
-            borderRadius: '8px', cursor: 'pointer', color: '#fff', transition: 'all 0.2s ease' }}>
+            borderRadius: '8px', cursor: 'pointer', color: '#fff', transition: 'all 0.2s ease',
+          }}
+        >
           <BarChart3 size={14} /> Analytics
         </button>
-        <div style={{ padding: '7px 14px', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}>
+
+        {/* Live node count — updates as user expands the graph */}
+        <div style={{
+          padding: '7px 14px', background: 'rgba(0,0,0,0.3)', borderRadius: '8px',
+          display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem',
+        }}>
           <LayoutTemplate size={14} color="var(--accent-color)" />
-          {graphData?.nodes?.length || 0} Nodes
+          {liveNodeCount} Nodes
         </div>
       </div>
 
       {/* Analytics Panel (Left Sidebar) */}
       {showAnalytics && !loading && analytics && (
-        <AnalyticsPanel 
-          analytics={analytics} 
+        <AnalyticsPanel
+          analytics={analytics}
           onClose={() => setShowAnalytics(false)}
-        />
-      )}
-
-      {/* Cluster Filter (Bottom Right) */}
-      {!loading && clusters.length >= 2 && (
-        <ClusterFilter 
-          clusters={clusters}
-          hiddenClusters={hiddenClusters}
-          onToggle={handleClusterToggle}
         />
       )}
 
       {/* Main Graph */}
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-          <div className="spinner" style={{ width: '40px', height: '40px', border: '3px solid rgba(255,255,255,0.1)', borderTop: '3px solid var(--accent-color)', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+          <div
+            className="spinner"
+            style={{
+              width: '40px', height: '40px',
+              border: '3px solid rgba(255,255,255,0.1)',
+              borderTop: '3px solid var(--accent-color)',
+              borderRadius: '50%', animation: 'spin 1s linear infinite',
+            }}
+          />
           <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
         </div>
       ) : error ? (
@@ -143,19 +135,19 @@ const GraphExplorer = () => {
           {error}
         </div>
       ) : (
-        <KnowledgeGraph 
-          graphData={graphData} 
-          onNodeClick={handleNodeClick}
-          hiddenClusters={hiddenClusters}
+        <KnowledgeGraph
+          initialData={seedData}
+          workspaceId={activeWorkspace?.id}
+          onNodeSelect={handleNodeSelect}
+          onNodeCountChange={setLiveNodeCount}
         />
       )}
 
       {/* Node Detail Panel (Right) */}
       {selectedNode && (
-        <NodePanel 
-          node={selectedNode} 
-          onClose={() => setSelectedNode(null)} 
-          onExplore={handleExploreNeighborhood}
+        <NodePanel
+          node={selectedNode}
+          onClose={() => setSelectedNode(null)}
         />
       )}
     </div>
