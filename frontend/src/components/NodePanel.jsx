@@ -126,13 +126,6 @@ const NodePanel = ({ node, onClose, onExplore }) => {
           </div>
         )}
 
-        <button 
-          className="btn-primary" 
-          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-          onClick={() => onExplore(node.name)}
-        >
-          <ExternalLink size={16} /> Explore Neighborhood
-        </button>
       </div>
     </div>
   );

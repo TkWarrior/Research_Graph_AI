@@ -129,7 +129,8 @@ const KnowledgeGraph = ({
   const [fetchingNode, setFetchingNode] = useState(null);
   const [hoverPanel, setHoverPanel] = useState(null); // { x, y, nodeName, nodeDesc, connections[] }
   const mousePositionRef = useRef({ x: 0, y: 0 });   // live cursor position in px
-  const hoverTimerRef = useRef(null);                 // debounce timer for panel
+  const hoverTimerRef = useRef(null);                 // debounce: show panel after 300ms
+  const hideTimerRef = useRef(null);                  // grace period: hide panel after 200ms
 
   // ── Fetch neighbors and merge into live graph ─────────────────────
   const expandNode = useCallback(async (nodeName) => {
@@ -463,9 +464,10 @@ const KnowledgeGraph = ({
       clearTimeout(hoverTimerRef.current);
       hoveredNodeRef.current = null;
       setHoveredNode(null);
-      setHoverPanel(null);
       containerRef.current.style.cursor = 'default';
       renderer.refresh();
+      // Grace period: give the cursor time to move into the panel without it vanishing
+      hideTimerRef.current = setTimeout(() => setHoverPanel(null), 200);
     });
 
     // Initial camera fit
@@ -573,8 +575,18 @@ const KnowledgeGraph = ({
       {/* Semantic Hover Panel */}
       {hoverPanel && (
         <div
-          onMouseEnter={() => clearTimeout(hoverTimerRef.current)}
-          onMouseLeave={() => setHoverPanel(null)}
+          onMouseEnter={() => {
+            // Cursor moved into the panel — cancel the pending hide
+            clearTimeout(hideTimerRef.current);
+          }}
+          onMouseLeave={() => {
+            // Cursor left the panel — hide immediately
+            setHoverPanel(null);
+          }}
+          onWheel={(e) => {
+            // Trap scroll so it doesn't fall through to the Sigma canvas
+            e.stopPropagation();
+          }}
           style={{
             position: 'absolute',
             left: Math.min(hoverPanel.x + 16, window.innerWidth - 340),
