@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     APP_NAME: str = "Autonomous Multi-Agent Research System"
     DEBUG: bool = True
 
+    # ── Auth (JWT) ────────────────────────────────────────────────────────
+    SECRET_KEY: str = "CHANGE_ME_IN_PRODUCTION_USE_openssl_rand_hex_32"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7   # 7 days
+
     # ── LLM & Embeddings ──────────────────────────────────────────────────
     GROQ_API_KEY: str = ""
     LLM_MODEL: str = "llama-3.3-70b-versatile"

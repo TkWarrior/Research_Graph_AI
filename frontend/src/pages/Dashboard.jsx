@@ -2,16 +2,34 @@ import React, { useState } from 'react';
 import UploadZone from '../components/UploadZone';
 import { Database, Zap, GitCommit } from 'lucide-react';
 import { api } from '../services/api';
+import { useWorkspace } from '../context/WorkspaceContext';
 
 const Dashboard = () => {
+  const { activeWorkspace } = useWorkspace();
   const [stats, setStats] = useState(null);
+  const [documents, setDocuments] = useState([]);
+  const [loadingDocs , setLoadingDocs] = useState(false);
+ const fetchDocuments = async () => {
+  if (!activeWorkspace) return;
+  setLoadingDocs(true);
+  try {
+    const docs = await api.getDocuments(activeWorkspace.id);
+    setDocuments(docs);
+  } catch (err) {
+    console.error("Error fetching documents:", err);
+  } finally {
+    setLoadingDocs(false);
+  }
+};
+
 
   const fetchStats = async () => {
+    if (!activeWorkspace) return;
     try {
-      const data = await api.getGraph(10); // just getting graph data to count nodes
+      const data = await api.getGraph(10, activeWorkspace.id);
       setStats({
         entities: data.nodes ? data.nodes.length : 0,
-        relationships: data.edges ? data.edges.length : 0
+        relationships: data.edges ? data.edges.length : 0,
       });
     } catch (err) {
       console.error(err);
@@ -20,22 +38,30 @@ const Dashboard = () => {
 
   React.useEffect(() => {
     fetchStats();
-  }, []);
+    fetchDocuments();
+  }, [activeWorkspace]);
 
   const handleUploadSuccess = () => {
-    // When upload finishes, it queues a background task. 
-    // We can show a pending message or refetch stats after a delay.
-    setTimeout(fetchStats, 5000);
-  };
+  fetchDocuments(); // Refresh list immediately to show the "uploaded" / "processing" state
+  setTimeout(() => {
+    fetchStats();
+    fetchDocuments(); 
+  }, 5000);
+};
+
 
   return (
     <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
       <div style={{ textAlign: 'center', margin: '40px 0 60px 0' }}>
         <h1 style={{ fontSize: '3rem', fontWeight: 700, marginBottom: '16px' }}>
-          Autonomous <span className="gradient-text">Research</span> System
+          {activeWorkspace
+            ? <><span className="gradient-text">{activeWorkspace.name}</span></>         
+            : <>Autonomous <span className="gradient-text">Research</span> System</>}
         </h1>
         <p style={{ fontSize: '1.2rem', color: 'var(--text-secondary)', maxWidth: '600px', margin: '0 auto' }}>
-          Upload documents to automatically extract knowledge graphs and perform deep semantic research using LangGraph and Neo4j.
+          {activeWorkspace
+            ? `Upload documents to ${activeWorkspace.name} to build its knowledge graph.`
+            : 'Select or create a workspace from the sidebar to get started.'}
         </p>
       </div>
 
@@ -43,9 +69,40 @@ const Dashboard = () => {
         <UploadZone onUploadSuccess={handleUploadSuccess} />
         
         <div className="glass-panel" style={{ padding: '32px' }}>
-          <h2 style={{ marginBottom: '24px', fontWeight: 600 }}>System Status</h2>
           
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <h2 style={{ marginBottom: '24px', fontWeight: 600 }}>Uploaded Documents</h2>
+          {documents.length === 0 && (
+            <p style={{ color: 'var(--text-secondary)' }}>No documents uploaded yet.</p>
+          )}
+          {documents.map((doc) => (
+  <div key={doc.id} className="glass-panel" style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.1)' }}>
+    <div>
+      <h4 style={{ margin: 0, fontWeight: 500, color: 'var(--text-primary)' }}>
+        {doc.original_filename}
+      </h4>
+      <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+        {new Date(doc.created_at).toLocaleDateString()} • {doc.file_type.toUpperCase()}
+      </span>
+    </div>
+    <div>
+      {/* Status Badge */}
+      <span className={`badge-${doc.status}`} style={{
+        padding: '4px 10px',
+        borderRadius: '12px',
+        fontSize: '0.8rem',
+        fontWeight: 600,
+        textTransform: 'uppercase',
+        // Dynamic colors based on status:
+        background: doc.status === 'completed' ? 'rgba(78, 205, 196, 0.15)' : doc.status === 'processing' ? 'rgba(110, 69, 226, 0.15)' : 'rgba(255, 107, 107, 0.15)',
+        color: doc.status === 'completed' ? '#4ECDC4' : doc.status === 'processing' ? '#88d3ce' : '#FF6B6B'
+      }}>
+        {doc.status}
+      </span>
+    </div>
+  </div>
+))}
+
+          {/* <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div className="glass-panel" style={{ padding: '20px', display: 'flex', alignItems: 'center', gap: '16px', background: 'rgba(0,0,0,0.2)' }}>
               <div style={{ background: 'rgba(110, 69, 226, 0.2)', padding: '12px', borderRadius: '12px', color: '#88d3ce' }}>
                 <Database size={24} />
@@ -77,8 +134,10 @@ const Dashboard = () => {
                 <p style={{ fontSize: '1.2rem', fontWeight: 600 }}>Groq (llama3-70b-8192)</p>
               </div>
             </div>
-          </div>
+          </div> */}
         </div>
+
+
       </div>
     </div>
   );

@@ -1,5 +1,8 @@
 """
 SQLAlchemy models for chat session and message persistence.
+
+ChatSession is now scoped to a Workspace (not a single Document),
+so a conversation can reason across all documents in that workspace.
 """
 
 import uuid
@@ -15,7 +18,7 @@ from app.database import Base
 class ChatSession(Base):
     """
     A chat session groups related Q&A messages together.
-    Optionally scoped to a specific document.
+    Scoped to a Workspace so the conversation can span multiple documents.
     """
 
     __tablename__ = "chat_sessions"
@@ -24,9 +27,10 @@ class ChatSession(Base):
     title = Column(
         String(255), nullable=True
     )  # auto-generated from first message
-    document_id = Column(
-        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=True
-    )  # optional scope to a document
+    # ── Workspace FK ─────────────────────────────────────────────────
+    workspace_id = Column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False
+    )
     created_at = Column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -36,17 +40,17 @@ class ChatSession(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    # Relationships
+    # ── Relationships ─────────────────────────────────────────────────
     messages = relationship(
         "ChatMessage",
         back_populates="session",
         cascade="all, delete-orphan",
         order_by="ChatMessage.created_at",
     )
-    document = relationship("Document", back_populates="chat_sessions")
+    workspace = relationship("Workspace", back_populates="chat_sessions")
 
     def __repr__(self):
-        return f"<ChatSession {self.id} title='{self.title}'>"
+        return f"<ChatSession {self.id} ws='{self.workspace_id}' title='{self.title}'>"
 
 
 class ChatMessage(Base):

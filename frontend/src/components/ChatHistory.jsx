@@ -1,7 +1,7 @@
 import React from 'react';
 import { MessageSquare, Plus, Trash2 } from 'lucide-react';
 
-const ChatHistory = ({ sessions, currentSessionId, onSelect, onNew, onDelete }) => {
+const ChatHistory = ({ sessions, currentSessionId, onSelect, onNew, onDelete, isLoading }) => {
   return (
     <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '280px', flexShrink: 0, borderRadius: '16px 0 0 16px', borderRight: '1px solid var(--glass-border)' }}>
       <div style={{ padding: '20px', borderBottom: '1px solid var(--glass-border)' }}>
@@ -19,8 +19,12 @@ const ChatHistory = ({ sessions, currentSessionId, onSelect, onNew, onDelete }) 
           Recent Sessions
         </h4>
         
-        {sessions.length === 0 ? (
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', textAlign: 'center', marginTop: '20px' }}>No chat history.</p>
+        {isLoading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', marginTop: '40px' }}>
+            <div className="spinner" style={{ width: '24px', height: '24px', border: '2px solid rgba(255,255,255,0.1)', borderTop: '2px solid var(--accent-color)', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+          </div>
+        ) : sessions.length === 0 ? (
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', textAlign: 'center', marginTop: '20px' }}>No research chats here yet.</p>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {sessions.map(session => (

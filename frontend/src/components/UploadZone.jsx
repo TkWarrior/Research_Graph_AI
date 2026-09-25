@@ -1,13 +1,16 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, File, CheckCircle, AlertCircle } from 'lucide-react';
+import { UploadCloud, File, CheckCircle, AlertCircle, Zap, Brain, Layers } from 'lucide-react';
 import { api } from '../services/api';
+import { useWorkspace } from '../context/WorkspaceContext';
 
 const UploadZone = ({ onUploadSuccess }) => {
+  const { activeWorkspace } = useWorkspace();
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState(null);
-  const [status, setStatus] = useState('idle'); // idle, uploading, processing, success, error
+  const [status, setStatus] = useState('idle');
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState(null);
+  const [graphMode, setGraphMode] = useState('cooccurrence');
   
   const fileInputRef = useRef(null);
 
@@ -54,27 +57,30 @@ const UploadZone = ({ onUploadSuccess }) => {
 
   const handleUpload = async () => {
     if (!file) return;
-    
+    if (!activeWorkspace) {
+      setError('Please select or create a workspace first.');
+      setStatus('error');
+      return;
+    }
     setStatus('uploading');
     setProgress(0);
-    
     try {
-      const response = await api.uploadDocument(file, (progressEvent) => {
-        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-        setProgress(percentCompleted);
-        
-        if (percentCompleted === 100) {
-          setStatus('processing');
-        }
-      });
-      
+      const response = await api.uploadDocument(
+        file,
+        activeWorkspace.id,
+        (progressEvent) => {
+          const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          setProgress(pct);
+          if (pct === 100) setStatus('processing');
+        },
+        graphMode
+      );
       setStatus('success');
       if (onUploadSuccess) onUploadSuccess(response);
-      
     } catch (err) {
       console.error(err);
       setStatus('error');
-      setError(err.response?.data?.detail || "An error occurred during upload");
+      setError(err.response?.data?.detail || 'An error occurred during upload');
     }
   };
 
@@ -82,7 +88,7 @@ const UploadZone = ({ onUploadSuccess }) => {
     <div className="glass-panel" style={{ padding: '32px', maxWidth: '600px', margin: '0 auto', textAlign: 'center' }}>
       <h2 style={{ marginBottom: '8px', fontWeight: 600 }}>Ingest Knowledge</h2>
       <p style={{ color: 'var(--text-secondary)', marginBottom: '24px', fontSize: '0.9rem' }}>
-        Upload a PDF or DOCX document to extract entities and build the knowledge graph.
+        Upload a PDF or DOCX document to build the knowledge graph.
       </p>
 
       <div 
@@ -138,11 +144,82 @@ const UploadZone = ({ onUploadSuccess }) => {
         </div>
       )}
 
+      {/* Graph Mode Selector */}
+      {file && status === 'idle' && (
+        <div style={{ marginBottom: '16px', textAlign: 'left' }}>
+          <label style={{ 
+            fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px', 
+            color: 'var(--text-secondary)', marginBottom: '8px', display: 'block', fontWeight: 600 
+          }}>
+            Graph Construction Mode
+          </label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {[
+              { 
+                value: 'cooccurrence', 
+                label: 'Co-occurrence (Fast)', 
+                icon: <Zap size={16} color="#4ECDC4" />,
+                desc: 'NLP-based word co-occurrence network. Free, ~2 seconds.',
+                color: '#4ECDC4',
+              },
+              { 
+                value: 'llm', 
+                label: 'LLM Semantic (Rich)', 
+                icon: <Brain size={16} color="#A29BFE" />,
+                desc: 'LLM extracts typed entities & named relationships. Uses API credits.',
+                color: '#A29BFE',
+              },
+              { 
+                value: 'both', 
+                label: 'Hybrid (Both)', 
+                icon: <Layers size={16} color="#FFE66D" />,
+                desc: 'Runs both modes in parallel. Richest graph, uses API credits.',
+                color: '#FFE66D',
+              },
+            ].map(mode => (
+              <button
+                key={mode.value}
+                onClick={() => setGraphMode(mode.value)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '10px',
+                  padding: '10px 14px',
+                  background: graphMode === mode.value 
+                    ? `${mode.color}18`
+                    : 'rgba(255,255,255,0.03)',
+                  border: `1px solid ${graphMode === mode.value ? mode.color + '55' : 'rgba(255,255,255,0.08)'}`,
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  color: '#fff',
+                  textAlign: 'left',
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                {mode.icon}
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: graphMode === mode.value ? 600 : 400, color: graphMode === mode.value ? mode.color : '#fff' }}>
+                    {mode.label}
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                    {mode.desc}
+                  </div>
+                </div>
+                {graphMode === mode.value && (
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: mode.color, flexShrink: 0 }} />
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {status === 'uploading' || status === 'processing' ? (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.85rem' }}>
             <span style={{ color: 'var(--text-secondary)' }}>
-              {status === 'uploading' ? 'Uploading...' : 'Processing document with LLM... (This may take a minute)'}
+              {status === 'uploading' 
+                ? 'Uploading...' 
+                : graphMode === 'cooccurrence' 
+                  ? 'Building co-occurrence network...' 
+                  : 'Processing document with LLM... (This may take a minute)'}
             </span>
             <span>{status === 'uploading' ? `${progress}%` : ''}</span>
           </div>
